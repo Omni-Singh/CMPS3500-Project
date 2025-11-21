@@ -61,11 +61,8 @@ public abstract class BaseModel implements Model {
         trainTime = (endTime - startTime) / 1e9; // Convert to seconds
         isFitted = true;
         
-        System.out.println(String.format("%s trained in %.4f seconds", modelName, trainTime));
     }
     
-    
-    // Actual implementation of fit - subclasses override this.
     protected abstract void fitImpl(double[][] X, double[] y);
     
     

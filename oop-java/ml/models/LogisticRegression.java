@@ -79,11 +79,6 @@ public class LogisticRegression extends BaseModel {
             }
             bias -= learningRate * gradB;
             
-            // Print progress every 50 epochs
-            if (epoch % 50 == 0 || epoch == epochs - 1) {
-                double loss = computeLoss(X, y, predictions);
-                System.out.println(String.format("Epoch %3d: Loss=%.4f", epoch, loss));
-            }
         }
     }
     
