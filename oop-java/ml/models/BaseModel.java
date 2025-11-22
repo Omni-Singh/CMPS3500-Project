@@ -87,7 +87,7 @@ public abstract class BaseModel implements Model {
         
         ModelMetrics metrics = new ModelMetrics(modelName, "Regression");
         metrics.addMetric("RMSE", MetricsUtil.rmse(y, predictions));
-        metrics.addMetric("R²", MetricsUtil.r2(y, predictions));
+        metrics.addMetric("R^2", MetricsUtil.r2(y, predictions));
         
         return metrics;
     }

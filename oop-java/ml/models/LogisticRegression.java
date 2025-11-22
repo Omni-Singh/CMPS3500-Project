@@ -5,8 +5,8 @@ import java.util.Random;
 // Logistic Regression for binary classification
 // Uses gradient descent with L2 regularization
 
-// Formula: p = σ(Xw + b) where σ(z) = 1 / (1 + e^(-z))
-// Loss: J = -mean[y log(p) + (1-y) log(1-p)] + λ/2 ||w||^2
+// Formula: p = (sigma)(Xw + b) where (sigma)(z) = 1 / (1 + e^(-z))
+// Loss: J = -mean[y log(p) + (1-y) log(1-p)] + (lamda)/2 ||w||^2
 
 public class LogisticRegression extends BaseModel {
     

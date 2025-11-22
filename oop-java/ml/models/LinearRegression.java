@@ -2,8 +2,8 @@ package ml.models;
 
 // Linear Regression using closed-form solution (Normal Equation)
 
-// Formula: w = (X^T X + λI)^(-1) X^T y
-// Prediction: ŷ = Xw + b
+// Formula: w = (X^T X + (lamda)I)^(-1) X^T y
+// Prediction: y = Xw + b
 public class LinearRegression extends BaseModel {
     
     private double[] weights;
@@ -37,7 +37,7 @@ public class LinearRegression extends BaseModel {
         // Compute X^T X
         double[][] XTX = matrixMultiply(transpose(XAug), XAug);
         
-        // Add L2 regularization: X^T X + λI
+        // Add L2 regularization: X^T X + (lambda)I
         for (int i = 0; i < d; i++) { // Only regularize weights, not bias
             XTX[i][i] += l2Lambda;
         }
@@ -50,7 +50,7 @@ public class LinearRegression extends BaseModel {
             }
         }
         
-        // Solve (X^T X + λI) w = X^T y using Gaussian elimination
+        // Solve (X^T X + (lamda)I) w = X^T y using Gaussian elimination
         double[] wAug = solveLinearSystem(XTX, XTy);
         
         // Extract weights and bias

@@ -57,8 +57,8 @@ public class ModelMetrics {
             if (hasMetric("RMSE")) {
                 sb.append(String.format("RMSE: %.4f\n", getMetric("RMSE")));
             }
-            if (hasMetric("R²")) {
-                sb.append(String.format("R²: %.4f\n", getMetric("R²")));
+            if (hasMetric("R^2")) {
+                sb.append(String.format("R^2: %.4f\n", getMetric("R^2")));
             }
         }
         

@@ -22,9 +22,9 @@ public class MLLibraryApp {
     }
     
     public void run() {
-        System.out.println("=".repeat(60));
+        System.out.println("=======================================================");
         System.out.println("ML Library - Java OOP Implementation");
-        System.out.println("=".repeat(60));
+        System.out.println("=======================================================");
         
         while (true) {
             displayMenu();
@@ -93,7 +93,7 @@ public class MLLibraryApp {
         String filepath = csvFiles[choice - 1].getAbsolutePath();
     
         System.out.println("\nLoading and cleaning input data set:");
-        System.out.println("*".repeat(40));
+        System.out.println("****************************************");
     
         String timestamp = new Date().toString();
         System.out.println("[" + timestamp + "] Starting Script");
@@ -134,14 +134,14 @@ public class MLLibraryApp {
         if (!checkDataLoaded()) return;
         
         System.out.println("\nLinear Regression (closed-form):");
-        System.out.println("*".repeat(40));
+        System.out.println("****************************************");
         System.out.println("\nEnter input options:");
 
         String target = getStringInput("Input option 1: Target variable (default: income): ", "income");
         double l2 = getDoubleInput("Input option 2: L2 (default 0.00, no regularization): ", 0.00);
         
         System.out.println("\nOutputs:");
-        System.out.println("*".repeat(10));
+        System.out.println("********************");
         
         LinearRegression model = new LinearRegression(l2);
         model.fit(trainSet.getX(), trainSet.getY());
@@ -151,7 +151,7 @@ public class MLLibraryApp {
         System.out.println("Algorithm: " + model.getName());
         System.out.println(String.format("Train time: %.4f seconds", model.getTrainTime()));
         System.out.println(String.format("Metric 1: RMSE: %.4f", metrics.getMetric("RMSE")));
-        System.out.println(String.format("Metric 2: R²: %.4f", metrics.getMetric("R²")));
+        System.out.println(String.format("Metric 2: R^2: %.4f", metrics.getMetric("R^2")));
         System.out.println("Metric 3: SLOC: 123");
         
         saveResults("linear", metrics, model.getTrainTime());
@@ -164,7 +164,7 @@ public class MLLibraryApp {
         if (!checkDataLoaded()) return;
         
         System.out.println("\nLogistic Regression (binary):");
-        System.out.println("*".repeat(40));
+        System.out.println("****************************************");
         System.out.println("\nEnter input options:");
         
         String target = getStringInput("Input option 1: Target variable (default income): ", "income");
@@ -174,7 +174,7 @@ public class MLLibraryApp {
         long seed = getIntInput("Input option 5: Random seed (default 7): ", 7);
         
         System.out.println("\nOutputs:");
-        System.out.println("*".repeat(10));
+        System.out.println("********************");
         
         LogisticRegression model = new LogisticRegression(lr, epochs, l2, seed);
         model.fit(trainSet.getX(), trainSet.getY());
@@ -197,14 +197,14 @@ public class MLLibraryApp {
         if (!checkDataLoaded()) return;
         
         System.out.println("\nk-Nearest Neighbors:");
-        System.out.println("*".repeat(40));
+        System.out.println("****************************************");
         System.out.println("\nEnter input options:");
         
         String target = getStringInput("Input option 1: Target variable (default income): ", "income");
         int k = getIntInput("Input option 2: Value of k (default 7): ", 7);
         
         System.out.println("\nOutputs:");
-        System.out.println("*".repeat(10));
+        System.out.println("********************");
         
         KNearestNeighbors model = new KNearestNeighbors(k);
         model.fit(trainSet.getX(), trainSet.getY());
@@ -226,7 +226,7 @@ public class MLLibraryApp {
         if (!checkDataLoaded()) return;
         
         System.out.println("\nDecision Tree (ID3):");
-        System.out.println("*".repeat(40));
+        System.out.println("****************************************");
         System.out.println("\nEnter input options:");
         
         String target = getStringInput("Input option 1: Target variable (default income): ", "income");
@@ -234,7 +234,7 @@ public class MLLibraryApp {
         int nBins = getIntInput("Input option 3: Number of bins (default 16): ", 16);
         
         System.out.println("\nOutputs:");
-        System.out.println("*".repeat(10));
+        System.out.println("********************");
         
         DecisionTree model = new DecisionTree(maxDepth, nBins);
         model.fit(trainSet.getX(), trainSet.getY());
@@ -257,14 +257,14 @@ public class MLLibraryApp {
         if (!checkDataLoaded()) return;
         
         System.out.println("\nGaussian Naive Bayes:");
-        System.out.println("*".repeat(40));
+        System.out.println("****************************************");
         System.out.println("\nEnter input options:");
         
         String target = getStringInput("Input option 1: Target variable (default income): ", "income");
         double smoothing = getDoubleInput("Input option 2: Variance smoothing (default 1e-9): ", 1e-9);
         
         System.out.println("\nOutputs:");
-        System.out.println("*".repeat(10));
+        System.out.println("********************");
         
         GaussianNaiveBayes model = new GaussianNaiveBayes(smoothing);
         model.fit(trainSet.getX(), trainSet.getY());
@@ -284,7 +284,7 @@ public class MLLibraryApp {
     
     private void printResults() {
         System.out.println("\nGeneral Results (Comparison):");
-        System.out.println("*".repeat(80));
+        System.out.println("********************************************************************************");
         
         if (results.isEmpty()) {
             System.out.println("No models have been trained yet.");
@@ -292,8 +292,8 @@ public class MLLibraryApp {
         }
         
         System.out.println(String.format("%-25s %-15s %-12s %-12s %-12s %-12s", 
-            "Model", "Task", "TrainTime(s)", "Accuracy", "Macro-F1", "RMSE/R²"));
-        System.out.println("-".repeat(80));
+            "Model", "Task", "TrainTime(s)", "Accuracy", "Macro-F1", "RMSE/R^2"));
+        System.out.println("--------------------------------------------------------------------------------");
         
         for (ModelResult result : results.values()) {
             String modelName = result.modelName;
@@ -307,7 +307,7 @@ public class MLLibraryApp {
                 metric2 = String.format("%.4f", result.metrics.getMetric("Macro-F1"));
             } else if (task.equals("Regression")) {
                 metric1 = String.format("%.4f", result.metrics.getMetric("RMSE"));
-                metric2 = String.format("%.4f", result.metrics.getMetric("R²"));
+                metric2 = String.format("%.4f", result.metrics.getMetric("R^2"));
             }
             
             System.out.println(String.format("%-25s %-15s %-12s %-12s %-12s", 

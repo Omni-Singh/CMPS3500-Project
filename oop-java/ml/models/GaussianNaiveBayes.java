@@ -102,7 +102,7 @@ public class GaussianNaiveBayes extends BaseModel {
                 double mean = classMeans[c][j];
                 double var = classVars[c][j];
                 
-                // Log of Gaussian PDF: -0.5 * log(2π) - 0.5 * log(var) - 0.5 * ((x - μ)^2 / var)
+                // Log of Gaussian PDF: -0.5 * log(2pi) - 0.5 * log(var) - 0.5 * ((x - mu)^2 / var)
                 double logLikelihood = -0.5 * Math.log(2 * Math.PI)
                                      - 0.5 * Math.log(var)
                                      - 0.5 * Math.pow(x[j] - mean, 2) / var;
