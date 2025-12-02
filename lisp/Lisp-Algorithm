@@ -1,0 +1,1181 @@
+(defpackage :ml-framework
+  (:use :cl)
+  (:export
+   ;; Main API
+   #:load-csv
+   #:save-results-csv
+   #:train-test-split
+   #:prepare-features
+   #:train-model
+   #:predict
+   #:evaluate
+   ;; Models
+   #:linear-regression
+   #:logistic-regression
+   #:k-nearest-neighbors
+   #:decision-tree
+   #:gaussian-naive-bayes
+   ;; Runner Functions
+   #:run-linear-regression
+   #:run-knn
+   #:run-decision-tree
+   #:run-naive-bayes
+   #:run-logistic-regression))
+
+(in-package :ml-framework)
+
+;;;; ============================================================================
+;;;; DATA Structures
+;;;; ============================================================================
+
+(defstruct dataset
+    "A dataset structure with features and target."
+    features
+    target
+    feature-names
+    target-name
+    stats)
+
+(defstruct model
+    "A generic model structure for the algorithms"
+    type 
+    parameters     ;Parameters specific to the model
+    hyperparams     ;setting for training
+    stats)
+
+(defstruct result
+    "Results from evaluation of model"
+    model-name
+    task-type   ; :classification or :regression
+    accuracy
+    macro-f1
+    rmse
+    r-squared
+    notes)
+
+
+;;;; ============================================================================
+;;;; UTILITY FUNCTIONS - MATH
+;;;; ============================================================================
+
+(defun mean (lst)
+    "Calculates the mean of a list."
+    (if (endp lst)
+        0.0
+    (/ (reduce #'+ lst) 
+        (length lst)))) 
+
+(defun variance (lst &optional (mean-value nil))
+    "Calculate the variance of a list."
+    (if (endp lst)
+        0.0
+        (let ((m (or mean-value (mean lst))))
+            (/ (reduce #'+ (mapcar (lambda (x) (expt (- x m) 2)) lst)) 
+                (length lst)))))
+
+(defun standard-deviation (lst &optional (mean-value nil))
+    "Calculates standard deviation of list."
+    (sqrt (variance lst mean-value)))
+
+(defun dot-product (v1 v2)
+    "Calculates the dot product of two vectors."
+    (reduce #'+ (mapcar #'* v1 v2)))
+
+(defun vector-addition (v1 v2)
+    "Addition of two vectors."
+    (mapcar #'+ v1 v2))
+
+(defun vector-subtraction (v1 v2)
+    "Subtraction of two vectors."
+    (mapcar #'- v1 v2))
+
+(defun vector-scale (scalar vector)
+    "Multiplying a vector by a scalar"
+    (mapcar (lambda (x) (* scalar x)) vector))
+
+(defun euclidean-distance (v1 v2)
+    "Calculates Euclidean distance of two vectors."
+    (sqrt (reduce #'+ (mapcar (lambda (a b) (expt (- a b) 2)) v1 v2))))
+
+(defun manhattan-distance (v1 v2)
+    "Calculates Manhattan distance between two vectors."
+    (reduce #'+ (mapcar (lambda (a b) (abs (- a b))) v1 v2)))
+
+(defun sigmoid (z)
+    "Computes logistic regressions for binary classification"
+    (/ 1.0 (+ 1.0 (exp (- z)))))
+
+(defun entropy (labels)
+    "Calculation of Shannons entropy of label list for decision trees"
+    (if (null labels)
+        0.0
+        ;create hash table
+        (let* ((counts (make-hash-table :test #'equal))
+                (n (length labels)))
+            (dolist (label labels)
+              (incf (gethash label counts 0)))
+            (let ((entropy-sum 0.0))
+              (maphash (lambda (label count)
+                    (declare (ignore label))
+                    (let ((p (/ count n)))
+                        (when (> p 0)
+                          (decf entropy-sum (* p (log p 2))))))
+                    counts)
+                entropy-sum))))
+
+(defun gaussian-log-pdf (x mean variance)
+    "Calculation of log of Gaussian PDF. -(x-m)^2/(2*sigma^2) - 1/2 log(2(pi)(sigma^2))"
+    (let ((var (max variance 1e-9))) ;avoid division by 0
+        (- (+ (/ (expt (- x mean) 2) 
+            (* 2 var))
+        (* 0.5 (log (* 2 pi var)))))))
+
+
+
+;;;; ============================================================================
+;;;; UTILITY FUNCTIONS - OTHER
+;;;; ============================================================================
+
+(defun parse-number (str)
+    "Converting string to number through read, return nil if not number."
+    (ignore-errors
+        (let ((*read-eval* nil))
+            (with-input-from-string (s str)
+                (read s)))))
+
+(defun numeric-string-p (str)
+  "Check if string is a number."
+  (and (stringp str)
+       (not (string= str ""))
+       (let ((num (parse-number str)))
+         (and num (numberp num)))))
+
+(defun one-hot-encode (dataset)
+    "One-hot encode for categorical features in a dataset. 
+    Returns a new dataset with encoded features."
+    (let* ((features (dataset-features dataset))
+            (feature-names (dataset-feature-names dataset))
+            (n-cols (length (first features)))
+            (encoded-features '())
+            (new-feature-names '())
+            (encoding-maps (make-hash-table)))
+        
+        ;;Must identify if col is categorical or numerical
+        (loop for col-idx from 0 below n-cols
+            for col-name in feature-names
+            do (let ((col-values (mapcar (lambda (row) (nth col-idx row)) features)))
+                    ;; Check each value in column if its numerical
+                    (if (every #'numeric-string-p col-values)
+                        ;; Keep Numeric column as is
+                        (progn
+                            (push col-name new-feature-names)
+                            (setf (gethash col-idx encoding-maps) :numeric))
+                        ;; Change Cateogrical to one-hot encoding map    
+                        (let* ((unique-vals (remove-duplicates col-values :test #'string=))
+                                (encoding-map (make-hash-table :test #'equal)))
+                            (loop for i from 0
+                                for val in unique-vals
+                                do (progn
+                                    (setf (gethash val encoding-map) i)
+                                    (push (format nil "~A_~A" col-name val)
+                                        new-feature-names)))
+                            (setf (gethash col-idx encoding-maps) encoding-map)))))
+        
+        (setf new-feature-names (nreverse new-feature-names))
+        
+        ;;Begin Encoding
+        (dolist (row features)
+            (let ((encoded-row '()))
+                (loop for col-idx from 0 below n-cols
+                    for val in row
+                    for encoding = (gethash col-idx encoding-maps)
+                    do (if (eq encoding :numeric)
+                            ;;Ensure it is numeric one last time in case of N/A or ""
+                            (let ((num-val (parse-number val)))
+                             (push (if num-val num-val 0.0) encoded-row))
+                            ;; Categorical - one-hot encode
+                     (let* ((n-categories (hash-table-count encoding))
+                            (one-hot (make-list n-categories :initial-element 0.0))
+                            (cat-idx (gethash val encoding)))
+                       (when cat-idx
+                         (setf (nth cat-idx one-hot) 1.0))
+                       (setf encoded-row (append (reverse one-hot) encoded-row)))))
+        (push (nreverse encoded-row) encoded-features)))
+
+    (make-dataset :features (nreverse encoded-features)
+                  :target (dataset-target dataset)
+                  :feature-names new-feature-names
+                  :target-name (dataset-target-name dataset))))
+
+(defun z-score-normalize (dataset &optional training-stats)
+  "Z-score normalization: (x - mean) / std. Training stats can be used.
+   Returns (values normalized-dataset stats-hash)"
+  (let* ((features (dataset-features dataset))
+         (n-cols (length (first features)))
+         (stats (or training-stats (make-hash-table))))
+
+    ;; Compute stats if not provided
+    (unless training-stats
+      (loop for col-idx from 0 below n-cols
+            do (let ((col-values (mapcar (lambda (row) (nth col-idx row)) features)))
+                 (when (every #'numberp col-values)
+                   (let ((m (mean col-values))
+                         (s (standard-deviation col-values)))
+                     (setf (gethash col-idx stats)
+                           (list :mean m :std (if (zerop s) 1.0 s))))))))
+
+    ;; Normalize features
+    (let ((normalized-features
+           (mapcar (lambda (row)
+                     (loop for col-idx from 0 below n-cols
+                           for val in row
+                           for stat = (gethash col-idx stats)
+                           collect (if (and stat (numberp val))
+                                       (let ((m (getf stat :mean))
+                                             (s (getf stat :std)))
+                                         (/ (- val m) s))
+                                       val)))
+                   features)))
+
+      (values
+       (make-dataset :features normalized-features
+                     :target (dataset-target dataset)
+                     :feature-names (dataset-feature-names dataset)
+                     :target-name (dataset-target-name dataset)
+                     :stats stats)
+       stats))))
+
+(defun prepare-features (dataset &key (normalize t))
+  "Takes a dataset and automatically one-hot encode with option to normalize.
+   Returns (values processed-dataset stats)"
+  (let ((encoded (one-hot-encode dataset)))
+    (if normalize
+        (z-score-normalize encoded)
+        (values encoded nil))))
+
+(defun apply-training-stats (dataset training-stats)
+  "Apply training preprocessing stats to new data."
+  (if training-stats
+      (z-score-normalize dataset training-stats)
+      dataset))
+
+;;;; ============================================================================
+;;;; CSV HANDLING
+;;;; ============================================================================
+
+(defun read-csv-line (line)
+  "Parse a CSV line into fields."
+  (let ((fields '())
+        (current-field (make-array 0 :element-type 'character
+                                    :fill-pointer 0 :adjustable t))
+        (in-quotes nil))
+    (loop for char across line do
+      (cond
+        ((char= char #\")
+         (setf in-quotes (not in-quotes)))
+        ((and (char= char #\,) (not in-quotes))
+         (push (copy-seq current-field) fields)
+         (setf (fill-pointer current-field) 0))
+        (t
+         (vector-push-extend char current-field))))
+    (push (copy-seq current-field) fields)
+    (nreverse fields)))
+
+(defun load-csv (filepath target-col)
+  "Load CSV file and return dataset structure.
+   target-col: name of target column (string)"
+  (with-open-file (stream filepath :direction :input)
+    (let* ((header (read-csv-line (read-line stream)))
+           (target-idx (position target-col header :test #'string=))
+           (feature-names (remove target-col header :test #'string=))
+           (rows '()))
+
+      (unless target-idx
+        (error "Target column ~A not found in CSV header" target-col))
+
+      ;; Read all data rows
+      (loop for line = (read-line stream nil nil)
+            while line
+            do (push (read-csv-line line) rows))
+
+      (setf rows (nreverse rows))
+
+      ;; Separate features and target
+      (let ((features '())
+            (target '()))
+        (dolist (row rows)
+          (let ((feature-row '()))
+            (loop for i from 0 below (length row)
+                  for val = (nth i row)
+                  do (if (= i target-idx)
+                         (push val target)
+                         (push val feature-row)))
+            (push (nreverse feature-row) features)))
+
+        (make-dataset :features (nreverse features)
+                      :target (nreverse target)
+                      :feature-names feature-names
+                      :target-name target-col)))))
+
+(defun format-number (num)
+  "Format number as decimal string, or empty if nil."
+  (if num
+      (format nil "~,4F" (coerce num 'float))
+      ""))
+
+(defun save-results-csv (results filepath)
+  "Save list of result structures to CSV file."
+  (with-open-file (stream filepath :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    ;; Write header
+    (format stream "Model,Task,Accuracy,Macro-F1,RMSE,R^2,Notes~%")
+
+    ;; Write each result
+    (dolist (res results)
+      (format stream "~A,~A,~A,~A,~A,~A,\"~A\"~%"
+              (result-model-name res)
+              (result-task-type res)
+              (format-number (result-accuracy res))
+              (format-number (result-macro-f1 res))
+              (format-number (result-rmse res))
+              (format-number (result-r-squared res))
+              (or (result-notes res) "")))))
+
+;;;; ============================================================================
+;;;; TRAIN/TEST SPLIT
+;;;; ============================================================================
+
+(defun shuffle-indices (n &optional (seed 42))
+  "Generate shuffled indices from 0 to n-1. Seed allows to reproduce same random order."
+  (let ((indices (loop for i from 0 below n collect i))
+        (*random-state* (sb-ext:seed-random-state seed)))
+    (loop for i from (1- n) downto 1
+          do (let ((j (random (1+ i))))
+               (rotatef (nth i indices) (nth j indices))))
+    indices))
+
+(defun train-test-split (dataset &key (test-size 0.3) (seed 42))
+  "Split dataset into training and test sets.
+   Returns (values train-dataset test-dataset)"
+  (let* ((n (length (dataset-features dataset)))
+         (n-test (floor (* n test-size)))
+         (n-train (- n n-test))
+         (shuffled-indices (shuffle-indices n seed))
+         (train-indices (subseq shuffled-indices 0 n-train))
+         (test-indices (subseq shuffled-indices n-train)))
+
+    (flet ((select-rows (indices)
+             (mapcar (lambda (i)
+                       (nth i (dataset-features dataset)))
+                     indices))
+           (select-targets (indices)
+             (mapcar (lambda (i)
+                       (nth i (dataset-target dataset)))
+                     indices)))
+
+      (values
+       (make-dataset :features (select-rows train-indices)
+                     :target (select-targets train-indices)
+                     :feature-names (dataset-feature-names dataset)
+                     :target-name (dataset-target-name dataset))
+       (make-dataset :features (select-rows test-indices)
+                     :target (select-targets test-indices)
+                     :feature-names (dataset-feature-names dataset)
+                     :target-name (dataset-target-name dataset))))))
+
+;;;; ============================================================================
+;;;; EVALUATION METRICS
+;;;; ============================================================================
+
+(defun accuracy (y-true y-pred)
+  "Calculate classification accuracy."
+  (let ((correct (count-if #'identity
+                           (mapcar #'equal y-true y-pred))))
+    (/ correct (length y-true))))
+
+(defun f1-score-for-label (y-true y-pred label)
+  "Calculate F1 score for a specific label."
+  (let ((tp 0) (fp 0) (fn 0))
+    (loop for true in y-true
+          for pred in y-pred
+          do (cond
+               ((and (equal pred label) (equal true label))
+                (incf tp))
+               ((and (equal pred label) (not (equal true label)))
+                (incf fp))
+               ((and (not (equal pred label)) (equal true label))
+                (incf fn))))
+
+    (let ((precision (if (zerop (+ tp fp)) 0.0 (/ tp (+ tp fp))))
+          (recall (if (zerop (+ tp fn)) 0.0 (/ tp (+ tp fn)))))
+      (if (zerop (+ precision recall))
+          0.0
+          (/ (* 2 precision recall) (+ precision recall))))))
+
+(defun macro-f1 (y-true y-pred)
+  "Calculate macro-averaged F1 score."
+  (let ((unique-labels (remove-duplicates y-true :test #'equal)))
+    (mean (mapcar (lambda (label)
+                    (f1-score-for-label y-true y-pred label))
+                  unique-labels))))
+
+(defun rmse (y-true y-pred)
+  "Calculate root mean squared error."
+  (sqrt (mean (mapcar (lambda (true pred)
+                        (expt (- true pred) 2))
+                      y-true y-pred))))
+
+(defun r-squared (y-true y-pred)
+  "Calculate R² coefficient of determination."
+  (let* ((y-mean (mean y-true))
+         (ss-tot (reduce #'+ (mapcar (lambda (y) (expt (- y y-mean) 2))
+                                     y-true)))
+         (ss-res (reduce #'+ (mapcar (lambda (true pred)
+                                       (expt (- true pred) 2))
+                                     y-true y-pred))))
+    (if (zerop ss-tot)
+        1.0
+        (- 1.0 (/ ss-res ss-tot)))))
+
+;;;; ============================================================================
+;;;; MODEL 1: LINEAR REGRESSION (Closed-Form)
+;;;; ============================================================================
+
+(defun matrix-transpose (matrix)
+  "Transpose a matrix (list of lists)."
+  (apply #'mapcar #'list matrix))
+
+(defun matrix-multiply (A B)
+  "Multiply two matrices."
+  (let ((B-T (matrix-transpose B)))
+    (mapcar (lambda (row-A)
+              (mapcar (lambda (col-B)
+                        (dot-product row-A col-B))
+                      B-T))
+            A)))
+
+(defun matrix-add (A B)
+  "Add two matrices element-wise."
+  (mapcar #'vector-addition A B))
+
+(defun matrix-identity (n)
+  "Create n×n identity matrix."
+  (loop for i from 0 below n
+        collect (loop for j from 0 below n
+                      collect (if (= i j) 1.0 0.0))))
+
+(defun matrix-inverse-2x2 (mat)
+  "Invert 2×2 matrix."
+  (let* ((a (first (first mat)))
+         (b (second (first mat)))
+         (c (first (second mat)))
+         (d (second (second mat)))
+         (det (- (* a d) (* b c))))
+    (when (zerop det)
+      (error "Matrix is singular"))
+    (list (list (/ d det) (/ (- b) det))
+          (list (/ (- c) det) (/ a det)))))
+
+(defun solve-linear-system (A b)
+  "Solve Ax = b using Gaussian elimination (simplified)."
+  (let* ((n (length A))
+         (augmented (mapcar (lambda (row-A b-i)
+                             (append row-A (list b-i)))
+                           A b)))
+
+    ;; Forward elimination
+    (loop for i from 0 below (1- n)
+          do (loop for j from (1+ i) below n
+                   for factor = (/ (nth i (nth j augmented))
+                                  (nth i (nth i augmented)))
+                   do (setf (nth j augmented)
+                           (mapcar (lambda (a b)
+                                     (- a (* factor b)))
+                                   (nth j augmented)
+                                   (nth i augmented)))))
+
+    ;; Back substitution
+    (let ((x (make-list n :initial-element 0.0)))
+      (loop for i from (1- n) downto 0
+            do (let ((sum (nth n (nth i augmented))))
+                 (loop for j from (1+ i) below n
+                       do (decf sum (* (nth j (nth i augmented))
+                                      (nth j x))))
+                 (setf (nth i x)
+                       (/ sum (nth i (nth i augmented))))))
+      x)))
+
+(defun train-linear-regression (dataset &key (l2 0.0))
+  "Train linear regression using closed-form solution (normal equation).
+   w = (X^T X + λI)^-1 X^T y"
+  (let* ((X (dataset-features dataset))
+         (y (mapcar #'parse-number (dataset-target dataset)))
+         (X-with-bias (mapcar (lambda (row) (cons 1.0 row)) X))
+         (X-T (matrix-transpose X-with-bias))
+         (XTX (matrix-multiply X-T X-with-bias)))
+
+    ;; Add L2 regularization: XTX + λI
+    (when (> l2 0)
+      (let ((I (matrix-identity (length XTX))))
+        (setf XTX (matrix-add XTX
+                              (mapcar (lambda (row)
+                                        (vector-scale l2 row))
+                                      I)))))
+
+    (let* ((XTy (mapcar (lambda (row-XT) (dot-product row-XT y)) X-T))
+           ;; Simplified: compute weights directly for small problems
+           (weights (solve-linear-system XTX XTy)))
+
+      (make-model :type :linear-regression
+                  :parameters (list :weights weights)
+                  :hyperparams (list :l2 l2)))))
+
+
+(defun predict-linear-regression (model dataset)
+  "Predict using linear regression model."
+  (let* ((weights (getf (model-parameters model) :weights))
+         (X (dataset-features dataset)))
+    (mapcar (lambda (row)
+              (dot-product weights (cons 1.0 row)))
+            X)))
+
+;;;; ============================================================================
+;;;; MODEL 2: LOGISTIC REGRESSION (Gradient Descent)
+;;;; ============================================================================
+
+(defun encode-target-labels (target)
+  "Convert string labels to numeric (0, 1, 2, ...).
+   Returns (values numeric-labels label-map)"
+  (let ((unique-labels (remove-duplicates target :test #'equal))
+        (label-map (make-hash-table :test #'equal)))
+    ;; Create mapping
+    (loop for i from 0
+          for label in unique-labels
+          do (setf (gethash label label-map) i))
+    ;; Convert to numeric
+    (values
+     (mapcar (lambda (label) (gethash label label-map)) target)
+     label-map)))
+
+(defun train-logistic-regression (dataset &key (epochs 400) (lr 0.2)
+                                          (l2 0.001) (seed 42))
+  "Train logistic regression using gradient descent."
+  (let* ((X (dataset-features dataset))
+         (y-raw (dataset-target dataset))
+         ;; Convert target to numeric if needed
+         (y (if (every #'numberp y-raw)
+                y-raw
+                (encode-target-labels y-raw)))
+         (n (length X))
+         (d (length (first X)))
+         (*random-state* (sb-ext:seed-random-state seed))
+         (w (loop repeat d collect (- (random 0.02) 0.01)))
+         (b 0.0))
+
+    ;; Gradient descent
+    (loop for epoch from 1 to epochs
+          do (let ((predictions '())
+                   (grad-w (make-list d :initial-element 0.0))
+                   (grad-b 0.0))
+
+               ;; Forward pass
+               (dolist (x-row X)
+                 (let* ((z (+ (dot-product w x-row) b))
+                        (pred (sigmoid z)))
+                   (push pred predictions)))
+               (setf predictions (nreverse predictions))
+
+               ;; Compute gradients
+               (loop for x-row in X
+                     for y-i in y
+                     for pred in predictions
+                     do (let ((error (- pred y-i)))
+                          (setf grad-w
+                                (vector-addition grad-w
+                                           (vector-scale error x-row)))
+                          (incf grad-b error)))
+
+               ;; Add L2 regularization to gradient
+               (setf grad-w (vector-addition grad-w (vector-scale l2 w)))
+
+               ;; Update parameters
+               (setf w (vector-subtraction w (vector-scale (/ lr n) grad-w)))
+               (setf b (- b (/ (* lr grad-b) n)))))
+
+    (make-model :type :logistic-regression
+                :parameters (list :weights w :bias b)
+                :hyperparams (list :epochs epochs :lr lr :l2 l2))))
+
+(defun predict-logistic-regression (model dataset &key (threshold 0.5))
+  "Predict using logistic regression model."
+  (let* ((params (model-parameters model))
+         (w (getf params :weights))
+         (b (getf params :bias))
+         (X (dataset-features dataset)))
+    (mapcar (lambda (row)
+              (let* ((z (+ (dot-product w row) b))
+                     (prob (sigmoid z)))
+                (if (>= prob threshold) 1 0)))
+            X)))
+
+;;;; ============================================================================
+;;;; MODEL 3: K-NEAREST NEIGHBORS
+;;;; ============================================================================
+
+(defun train-knn (dataset &key (k 5) (distance-fn #'euclidean-distance)
+                         (weighted nil))
+  "Train k-NN (lazy learner - just store training data)."
+  (make-model :type :k-nearest-neighbors
+              :parameters (list :X-train (dataset-features dataset)
+                               :y-train (dataset-target dataset))
+              :hyperparams (list :k k
+                                :distance-fn distance-fn
+                                :weighted weighted)))
+
+(defun predict-knn (model dataset)
+  "Predict using k-NN model."
+  (let* ((params (model-parameters model))
+         (hyperparams (model-hyperparams model))
+         (X-train (getf params :X-train))
+         (y-train (getf params :y-train))
+         (X-test (dataset-features dataset))
+         (k (getf hyperparams :k))
+         (distance-fn (getf hyperparams :distance-fn))
+         (weighted (getf hyperparams :weighted)))
+
+    (mapcar (lambda (test-row)
+              ;; Compute distances to all training points
+              (let* ((distances
+                      (mapcar (lambda (train-row)
+                                (funcall distance-fn test-row train-row))
+                              X-train))
+                     ;; Get indices of k nearest neighbors
+                     (sorted-indices
+                      (subseq (sort (loop for i from 0 below (length distances)
+                                         collect (cons (nth i distances) i))
+                                   #'< :key #'car)
+                              0 (min k (length distances)))))
+
+                (if weighted
+                    ;; Weighted voting (inverse distance)
+                    (let ((votes (make-hash-table :test #'equal)))
+                      (dolist (dist-idx sorted-indices)
+                        (let* ((idx (cdr dist-idx))
+                               (dist (car dist-idx))
+                               (label (nth idx y-train))
+                               (weight (/ 1.0 (+ dist 1e-9))))
+                          (incf (gethash label votes 0.0) weight)))
+
+                      ;; Return label with highest weighted vote
+                      (let ((max-label nil)
+                            (max-weight -1.0))
+                        (maphash (lambda (label weight)
+                                   (when (> weight max-weight)
+                                     (setf max-weight weight
+                                           max-label label)))
+                                 votes)
+                        max-label))
+
+                    ;; Simple majority voting
+                    (let* ((neighbor-labels
+                            (mapcar (lambda (dist-idx)
+                                      (nth (cdr dist-idx) y-train))
+                                    sorted-indices))
+                           (counts (make-hash-table :test #'equal)))
+                      (dolist (label neighbor-labels)
+                        (incf (gethash label counts 0)))
+
+                      ;; Return most common label
+                      (let ((max-label nil)
+                            (max-count 0))
+                        (maphash (lambda (label count)
+                                   (when (> count max-count)
+                                     (setf max-count count
+                                           max-label label)))
+                                 counts)
+                        max-label)))))
+            X-test)))
+
+;;;; ============================================================================
+;;;; MODEL 4: DECISION TREE (ID3)
+;;;; ============================================================================
+
+
+
+(defun discretize-column (col n-bins)
+  "Discretize numeric column into bins."
+  (let* ((sorted (sort (copy-seq col) #'<))
+         (min-val (first sorted))
+         (max-val (first (last sorted)))
+         (bin-width (/ (- max-val min-val) n-bins)))
+    (mapcar (lambda (val)
+              (min (floor (/ (- val min-val) (max bin-width 1e-9)))
+                   (1- n-bins)))
+            col)))
+
+(defun information-gain (y x-col n-bins)
+  "Calculate information gain for splitting on x-col."
+  (let* ((parent-entropy (entropy y))
+         (bins (discretize-column x-col n-bins))
+         (unique-bins (remove-duplicates bins))
+         (n (length y))
+         (weighted-child-entropy 0.0))
+
+    (dolist (bin-val unique-bins)
+      (let ((subset-y (loop for y-i in y
+                           for bin-i in bins
+                           when (equal bin-i bin-val)
+                           collect y-i)))
+        (when subset-y
+          (let ((weight (/ (length subset-y) n)))
+            (incf weighted-child-entropy
+                  (* weight (entropy subset-y)))))))
+
+    (- parent-entropy weighted-child-entropy)))
+
+(defun train-decision-tree (dataset &key (max-depth 5) (min-samples-split 2)
+                                    (n-bins 16))
+  "Train decision tree using ID3 algorithm."
+  (labels ((build-tree (X y depth)
+             (cond
+               ;; Stopping criteria
+               ((or (>= depth max-depth)
+                    (< (length y) min-samples-split)
+                    (= (length (remove-duplicates y :test #'equal)) 1))
+                ;; Create leaf node
+                (let* ((counts (make-hash-table :test #'equal))
+                       (max-label nil)
+                       (max-count 0))
+                  (dolist (label y)
+                    (incf (gethash label counts 0)))
+                  (maphash (lambda (label count)
+                             (when (> count max-count)
+                               (setf max-count count
+                                     max-label label)))
+                           counts)
+                  (list :leaf t :label max-label)))
+
+               ;; Find best split
+               (t
+                (let* ((n-features (length (first X)))
+                       (best-feature nil)
+                       (best-gain -1.0))
+
+                  ;; Evaluate each feature
+                  (loop for feat-idx from 0 below n-features
+                        for col = (mapcar (lambda (row) (nth feat-idx row)) X)
+                        for gain = (information-gain y col n-bins)
+                        when (> gain best-gain)
+                        do (setf best-gain gain
+                                best-feature feat-idx))
+
+                  (if (null best-feature)
+                      ;; No good split found - create leaf
+                      (list :leaf t :label (first y))
+
+                      ;; Split on best feature
+                      (let* ((best-col (mapcar (lambda (row)
+                                                (nth best-feature row))
+                                              X))
+                             ;; Calculate binning parameters
+                             (sorted (sort (copy-seq best-col) #'<))
+                             (min-val (first sorted))
+                             (max-val (first (last sorted)))
+                             (bin-width (/ (- max-val min-val) n-bins))
+                             (bins (discretize-column best-col n-bins))
+                             (unique-bins (remove-duplicates bins))
+                             (children (make-hash-table)))
+
+                        (dolist (bin-val unique-bins)
+                          (let ((subset-X '())
+                                (subset-y '()))
+                            (loop for x-row in X
+                                  for y-i in y
+                                  for bin-i in bins
+                                  when (equal bin-i bin-val)
+                                  do (progn
+                                       (push x-row subset-X)
+                                       (push y-i subset-y)))
+
+                            (setf (gethash bin-val children)
+                                  (build-tree (nreverse subset-X)
+                                            (nreverse subset-y)
+                                            (1+ depth)))))
+
+                        ;; Store binning parameters for prediction
+                        (list :leaf nil
+                              :feature best-feature
+                              :children children
+                              :n-bins n-bins
+                              :min-val min-val
+                              :max-val max-val
+                              :bin-width bin-width))))))))
+
+    (let ((tree (build-tree (dataset-features dataset)
+                           (dataset-target dataset)
+                           0)))
+      (make-model :type :decision-tree
+                  :parameters (list :tree tree)
+                  :hyperparams (list :max-depth max-depth
+                                    :min-samples-split min-samples-split
+                                    :n-bins n-bins)))))
+
+(defun predict-decision-tree (model dataset)
+  "Predict using decision tree model."
+  (let ((tree (getf (model-parameters model) :tree))
+        (X (dataset-features dataset)))
+
+    (labels ((predict-one (node x-row)
+               (if (getf node :leaf)
+                   (getf node :label)
+                   (let* ((feat-idx (getf node :feature))
+                          (n-bins (getf node :n-bins))
+                          (min-val (getf node :min-val))
+                          (bin-width (getf node :bin-width))
+                          (feat-val (nth feat-idx x-row))
+                          ;; Use same binning formula as training
+                          (bin-val (min (floor (/ (- feat-val min-val) (max bin-width 1e-9)))
+                                       (1- n-bins)))
+                          (children (getf node :children))
+                          (child (gethash bin-val children)))
+                     (if child
+                         (predict-one child x-row)
+                         (getf node :label))))))
+
+      (mapcar (lambda (row) (predict-one tree row)) X))))
+
+;;;; ============================================================================
+;;;; MODEL 5: GAUSSIAN NAIVE BAYES
+;;;; ============================================================================
+
+(defun train-gaussian-naive-bayes (dataset &key (var-smoothing 1e-9))
+  "Train Gaussian Naive Bayes classifier."
+  (let* ((X (dataset-features dataset))
+         (y (dataset-target dataset))
+         (classes (remove-duplicates y :test #'equal))
+         (n-features (length (first X)))
+         (class-stats (make-hash-table :test #'equal)))
+
+    ;; For each class, compute mean and variance of each feature
+    (dolist (class classes)
+      (let ((class-X (loop for x-row in X
+                          for y-i in y
+                          when (equal y-i class)
+                          collect x-row)))
+
+        (let ((means '())
+              (variances '())
+              (prior (/ (length class-X) (length y))))
+
+          ;; Compute per-feature statistics
+          (loop for feat-idx from 0 below n-features
+                for feat-vals = (mapcar (lambda (row) (nth feat-idx row))
+                                       class-X)
+                for m = (mean feat-vals)
+                for v = (+ (variance feat-vals m) var-smoothing)
+                do (progn
+                     (push m means)
+                     (push v variances)))
+
+          (setf (gethash class class-stats)
+                (list :prior prior
+                      :means (nreverse means)
+                      :variances (nreverse variances))))))
+
+    (make-model :type :gaussian-naive-bayes
+                :parameters (list :classes classes
+                                 :class-stats class-stats)
+                :hyperparams (list :var-smoothing var-smoothing))))
+
+(defun predict-gaussian-naive-bayes (model dataset)
+  "Predict using Gaussian Naive Bayes model."
+  (let* ((params (model-parameters model))
+         (classes (getf params :classes))
+         (class-stats (getf params :class-stats))
+         (X (dataset-features dataset)))
+
+    (mapcar (lambda (x-row)
+              (let ((max-class nil)
+                    (max-log-prob most-negative-double-float))
+
+                ;; For each class, compute log probability
+                (dolist (class classes)
+                  (let* ((stats (gethash class class-stats))
+                         (prior (getf stats :prior))
+                         (means (getf stats :means))
+                         (variances (getf stats :variances))
+                         (log-prob (log prior)))
+
+                    ;; Add log probability for each feature
+                    (loop for x-i in x-row
+                          for mean in means
+                          for var in variances
+                          do (incf log-prob
+                                  (gaussian-log-pdf x-i mean var)))
+
+                    (when (> log-prob max-log-prob)
+                      (setf max-log-prob log-prob
+                            max-class class))))
+
+                max-class))
+            X)))
+
+;;;; ============================================================================
+;;;; UNIFIED API
+;;;; ============================================================================
+
+(defun train-model (model-type dataset &rest args)
+  "Unified interface for training any model.
+   model-type: :linear-regression, :logistic-regression, :knn, :decision-tree, :naive-bayes"
+  (case model-type
+    (:linear-regression
+     (apply #'train-linear-regression dataset args))
+    (:logistic-regression
+     (apply #'train-logistic-regression dataset args))
+    (:knn
+     (apply #'train-knn dataset args))
+    (:decision-tree
+     (apply #'train-decision-tree dataset args))
+    (:naive-bayes
+     (apply #'train-gaussian-naive-bayes dataset args))
+    (otherwise
+     (error "Unknown model type: ~A" model-type))))
+
+(defun predict (model dataset)
+  "Unified interface for prediction."
+  (case (model-type model)
+    (:linear-regression
+     (predict-linear-regression model dataset))
+    (:logistic-regression
+     (predict-logistic-regression model dataset))
+    (:k-nearest-neighbors
+     (predict-knn model dataset))
+    (:decision-tree
+     (predict-decision-tree model dataset))
+    (:gaussian-naive-bayes
+     (predict-gaussian-naive-bayes model dataset))
+    (otherwise
+     (error "Unknown model type: ~A" (model-type model)))))
+
+(defun normalize-labels (y-true y-pred)
+  "Normalize labels so they can be compared.
+   If y-pred is numeric but y-true is string, convert y-true to numeric.
+   Returns (values normalized-y-true normalized-y-pred)"
+  (cond
+    ;; Both are same type - no conversion needed
+    ((equal (type-of (first y-true)) (type-of (first y-pred)))
+     (values y-true y-pred))
+
+    ;; y-pred is numeric, y-true is string - convert y-true
+    ((and (numberp (first y-pred)) (stringp (first y-true)))
+     (values (encode-target-labels y-true) y-pred))
+
+    ;; y-pred is string, y-true is numeric - convert y-pred (shouldn't happen)
+    ((and (stringp (first y-pred)) (numberp (first y-true)))
+     (values y-true (encode-target-labels y-pred)))
+
+    ;; Default - return as is
+    (t (values y-true y-pred))))
+
+(defun evaluate (model test-dataset task-type)
+  "Evaluate model and return result structure.
+   task-type: :classification or :regression"
+  (let* ((y-true-raw (dataset-target test-dataset))
+         (y-pred-raw (predict model test-dataset))
+         (model-name (symbol-name (model-type model))))
+
+    ;; Normalize labels for classification
+    (multiple-value-bind (y-true y-pred)
+        (if (eq task-type :classification)
+            (normalize-labels y-true-raw y-pred-raw)
+             (values (mapcar #'parse-number y-true-raw)
+                    y-pred-raw))
+
+      (case task-type
+        (:classification
+         (make-result :model-name model-name
+                      :task-type "Classification"
+                      :accuracy (accuracy y-true y-pred)
+                      :macro-f1 (macro-f1 y-true y-pred)
+                      :notes (format nil "~{~A: ~A~^, ~}"
+                                    (loop for (k v) on (model-hyperparams model)
+                                         by #'cddr
+                                         collect (string-downcase (symbol-name k))
+                                         collect v))))
+        (:regression
+         (make-result :model-name model-name
+                      :task-type "Regression"
+                      :rmse (rmse y-true y-pred)
+                      :r-squared (r-squared y-true y-pred)
+                      :notes (format nil "~{~A: ~A~^, ~}"
+                                    (loop for (k v) on (model-hyperparams model)
+                                         by #'cddr
+                                         collect (string-downcase (symbol-name k))
+                                         collect v))))
+        (otherwise
+         (error "Unknown task type: ~A" task-type))))))
+
+;;;; ============================================================================
+;;;; INDIVIDUAL MODEL RUNNER FUNCTIONS
+;;;; ============================================================================
+;;;; Call these directly to run a single model
+
+(defun run-linear-regression (csv-path target-col &key
+                               (test-size 0.3) (normalize t) (seed 42)
+                               (l2 0.0)
+                               (output-csv "linear_regression_results.csv"))
+  "Run Linear Regression model on CSV data.
+   Returns result structure, saves to output-csv."
+  (format t "~%Running Linear Regression...~%")
+  (let ((data (load-csv csv-path target-col)))
+    (format t "Loaded ~A samples~%" (length (dataset-features data)))
+    (multiple-value-bind (processed stats)
+        (prepare-features data :normalize normalize)
+      (declare (ignore stats))
+      (multiple-value-bind (train test)
+          (train-test-split processed :test-size test-size :seed seed)
+        (format t "Train: ~A, Test: ~A~%"
+                (length (dataset-features train))
+                (length (dataset-features test)))
+        (format t "Training...~%")
+        (let* ((model (train-model :linear-regression train :l2 l2)))
+          (format t "Evaluating...~%")
+          (let ((result (evaluate model test :regression)))
+            (format t "~%Results:~%")
+            (format t "  RMSE: ~,4F~%" (result-rmse result))
+            (format t "  R²: ~,4F~%~%" (result-r-squared result))
+            (save-results-csv (list result) output-csv)
+            (format t "✓ Results saved to: ~A~%~%" output-csv)
+            result))))))
+
+(defun run-logistic-regression (csv-path target-col &key
+                                 (test-size 0.3) (normalize t) (seed 42)
+                                 (epochs 100) (lr 0.2) (l2 0.001)
+                                 (output-csv "logistic_regression_results.csv"))
+  "Run Logistic Regression model on CSV data.
+   Returns result structure, saves to output-csv."
+  (format t "~%Running Logistic Regression...~%")
+  (let ((data (load-csv csv-path target-col)))
+    (format t "Loaded ~A samples~%" (length (dataset-features data)))
+    (multiple-value-bind (processed stats)
+        (prepare-features data :normalize normalize)
+      (declare (ignore stats))
+      (multiple-value-bind (train test)
+          (train-test-split processed :test-size test-size :seed seed)
+        (format t "Train: ~A, Test: ~A~%"
+                (length (dataset-features train))
+                (length (dataset-features test)))
+        (format t "Training (~A epochs)...~%" epochs)
+        (let* ((model (train-model :logistic-regression train
+                                   :epochs epochs :lr lr :l2 l2 :seed seed)))
+          (format t "Evaluating...~%")
+          (let ((result (evaluate model test :classification)))
+            (format t "~%Results:~%")
+            (format t "  Accuracy: ~,4F (~,2F%)~%"
+                    (result-accuracy result)
+                    (* (result-accuracy result) 100))
+            (format t "  Macro-F1: ~,4F~%~%" (result-macro-f1 result))
+            (save-results-csv (list result) output-csv)
+            (format t "✓ Results saved to: ~A~%~%" output-csv)
+            result))))))
+
+(defun run-knn (csv-path target-col &key
+                (test-size 0.3) (normalize t) (seed 42)
+                (k 5) (distance-fn #'euclidean-distance) (weighted nil)
+                (output-csv "knn_results.csv"))
+  "Run k-Nearest Neighbors model on CSV data.
+   Returns result structure, saves to output-csv."
+  (format t "~%Running k-Nearest Neighbors...~%")
+  (let ((data (load-csv csv-path target-col)))
+    (format t "Loaded ~A samples~%" (length (dataset-features data)))
+    (multiple-value-bind (processed stats)
+        (prepare-features data :normalize normalize)
+      (declare (ignore stats))
+      (multiple-value-bind (train test)
+          (train-test-split processed :test-size test-size :seed seed)
+        (format t "Train: ~A, Test: ~A~%"
+                (length (dataset-features train))
+                (length (dataset-features test)))
+        (format t "Training k-NN (k=~A)...~%" k)
+        (let* ((model (train-model :knn train
+                                   :k k :distance-fn distance-fn
+                                   :weighted weighted)))
+          (format t "Evaluating (computing distances for all test samples - this may take several minutes)...~%")
+          (let ((result (evaluate model test :classification)))
+            (format t "~%Results:~%")
+            (format t "  Accuracy: ~,4F (~,2F%)~%"
+                    (result-accuracy result)
+                    (* (result-accuracy result) 100))
+            (format t "  Macro-F1: ~,4F~%~%" (result-macro-f1 result))
+            (save-results-csv (list result) output-csv)
+            (format t "✓ Results saved to: ~A~%~%" output-csv)
+            result))))))
+
+(defun run-decision-tree (csv-path target-col &key
+                          (test-size 0.3) (normalize t) (seed 42)
+                          (max-depth 4) (min-samples-split 2) (n-bins 16)
+                          (output-csv "decision_tree_results.csv"))
+  "Run Decision Tree (ID3) model on CSV data.
+   Returns result structure, saves to output-csv."
+  (format t "~%Running Decision Tree...~%")
+  (let ((data (load-csv csv-path target-col)))
+    (format t "Loaded ~A samples~%" (length (dataset-features data)))
+    (multiple-value-bind (processed stats)
+        (prepare-features data :normalize normalize)
+      (declare (ignore stats))
+      (multiple-value-bind (train test)
+          (train-test-split processed :test-size test-size :seed seed)
+        (format t "Train: ~A, Test: ~A~%"
+                (length (dataset-features train))
+                (length (dataset-features test)))
+        (format t "Training (max-depth=~A)...~%" max-depth)
+        (let* ((model (train-model :decision-tree train
+                                   :max-depth max-depth
+                                   :min-samples-split min-samples-split
+                                   :n-bins n-bins)))
+          (format t "Evaluating...~%")
+          (let ((result (evaluate model test :classification)))
+            (format t "~%Results:~%")
+            (format t "  Accuracy: ~,4F (~,2F%)~%"
+                    (result-accuracy result)
+                    (* (result-accuracy result) 100))
+            (format t "  Macro-F1: ~,4F~%~%" (result-macro-f1 result))
+            (save-results-csv (list result) output-csv)
+            (format t "✓ Results saved to: ~A~%~%" output-csv)
+            result))))))
+
+(defun run-naive-bayes (csv-path target-col &key
+                        (test-size 0.3) (normalize t) (seed 42)
+                        (var-smoothing 1e-9)
+                        (output-csv "naive_bayes_results.csv"))
+  "Run Gaussian Naive Bayes model on CSV data.
+   Returns result structure, saves to output-csv."
+  (format t "~%Running Gaussian Naive Bayes...~%")
+  (let ((data (load-csv csv-path target-col)))
+    (format t "Loaded ~A samples~%" (length (dataset-features data)))
+    (multiple-value-bind (processed stats)
+        (prepare-features data :normalize normalize)
+      (declare (ignore stats))
+      (multiple-value-bind (train test)
+          (train-test-split processed :test-size test-size :seed seed)
+        (format t "Train: ~A, Test: ~A~%"
+                (length (dataset-features train))
+                (length (dataset-features test)))
+        (format t "Training...~%")
+        (let* ((model (train-model :naive-bayes train
+                                   :var-smoothing var-smoothing)))
+          (format t "Evaluating...~%")
+          (let ((result (evaluate model test :classification)))
+            (format t "~%Results:~%")
+            (format t "  Accuracy: ~,4F (~,2F%)~%"
+                    (result-accuracy result)
+                    (* (result-accuracy result) 100))
+            (format t "  Macro-F1: ~,4F~%~%" (result-macro-f1 result))
+            (save-results-csv (list result) output-csv)
+            (format t "✓ Results saved to: ~A~%~%" output-csv)
+            result))))))
+
+;;;; ============================================================================
+;;;; END OF FRAMEWORK
+;;;; ============================================================================
