@@ -1,3 +1,19 @@
+;;;; ============================================================================
+;;;; Unified Machine Learning Framework in Common Lisp
+;;;; ============================================================================
+;;;; Implements 5 ML algorithms with shared utilities:
+;;;;   1. Linear Regression (Closed-Form)
+;;;;   2. Logistic Regression (Gradient Descent)
+;;;;   3. k-Nearest Neighbors
+;;;;   4. Decision Tree (ID3)
+;;;;   5. Gaussian Naive Bayes
+;;;;
+;;;; Features:
+;;;;   - CSV loading and exporting
+;;;;   - Data preprocessing (one-hot encoding, Z-normalization)
+;;;;   - Train/test split
+;;;; ============================================================================
+
 (defpackage :ml-framework
   (:use :cl)
   (:export
@@ -15,249 +31,155 @@
    #:k-nearest-neighbors
    #:decision-tree
    #:gaussian-naive-bayes
-   ;; Runner Functions
+   ;; Distance functions
+   #:euclidean-distance
+   #:manhattan-distance
+   #:squared-euclidean-distance
+   ;; Individual runner functions
    #:run-linear-regression
+   #:run-logistic-regression
    #:run-knn
    #:run-decision-tree
    #:run-naive-bayes
-   #:run-logistic-regression))
+   #:run-model-by-name))
 
 (in-package :ml-framework)
 
 ;;;; ============================================================================
-;;;; DATA Structures
+;;;; DECLARATIONS 
 ;;;; ============================================================================
 
-(defstruct dataset
-    "A dataset structure with features and target."
-    features
-    target
-    feature-names
-    target-name
-    stats)
-
-(defstruct model
-    "A generic model structure for the algorithms"
-    type 
-    parameters     ;Parameters specific to the model
-    hyperparams     ;setting for training
-    stats)
-
-(defstruct result
-    "Results from evaluation of model"
-    model-name
-    task-type   ; :classification or :regression
-    accuracy
-    macro-f1
-    rmse
-    r-squared
-    notes)
+(declaim (ftype (function (list list) list) solve-linear-system))
+(declaim (ftype (function (list fixnum) list) discretize-column))
 
 
 ;;;; ============================================================================
-;;;; UTILITY FUNCTIONS - MATH
+;;;; UTILITY FUNCTIONS - Math Operations
 ;;;; ============================================================================
 
 (defun mean (lst)
-    "Calculates the mean of a list."
-    (if (endp lst)
-        0.0
-    (/ (reduce #'+ lst) 
-        (length lst)))) 
+  "Calculate arithmetic mean of a list."
+  (if (null lst)
+      0.0
+      (/ (reduce #'+ lst) (length lst))))
 
-(defun variance (lst &optional (mean-value nil))
-    "Calculate the variance of a list."
-    (if (endp lst)
+(defun variance (lst &optional (mean-val nil))
+  "Calculate variance of a list."
+  (let ((m (or mean-val (mean lst))))
+    (if (null lst)
         0.0
-        (let ((m (or mean-value (mean lst))))
-            (/ (reduce #'+ (mapcar (lambda (x) (expt (- x m) 2)) lst)) 
-                (length lst)))))
+        (/ (reduce #'+ (mapcar (lambda (x) (expt (- x m) 2)) lst))
+           (length lst)))))
 
-(defun standard-deviation (lst &optional (mean-value nil))
-    "Calculates standard deviation of list."
-    (sqrt (variance lst mean-value)))
+(defun standard-deviation (lst &optional (mean-val nil))
+  "Calculate standard deviation of a list."
+  (sqrt (variance lst mean-val)))
 
 (defun dot-product (v1 v2)
-    "Calculates the dot product of two vectors."
-    (reduce #'+ (mapcar #'* v1 v2)))
+  "Calculate dot product of two vectors."
+  (reduce #'+ (mapcar #'* v1 v2)))
 
-(defun vector-addition (v1 v2)
-    "Addition of two vectors."
-    (mapcar #'+ v1 v2))
+(defun vector-add (v1 v2)
+  "Add two vectors element-wise."
+  (mapcar #'+ v1 v2))
 
-(defun vector-subtraction (v1 v2)
-    "Subtraction of two vectors."
-    (mapcar #'- v1 v2))
+(defun vector-subtract (v1 v2)
+  "Subtract two vectors element-wise."
+  (mapcar #'- v1 v2))
 
-(defun vector-scale (scalar vector)
-    "Multiplying a vector by a scalar"
-    (mapcar (lambda (x) (* scalar x)) vector))
+(defun vector-scale (scalar vec)
+  "Multiply vector by scalar."
+  (mapcar (lambda (x) (* scalar x)) vec))
 
 (defun euclidean-distance (v1 v2)
-    "Calculates Euclidean distance of two vectors."
-    (sqrt (reduce #'+ (mapcar (lambda (a b) (expt (- a b) 2)) v1 v2))))
+  "Calculate Euclidean distance between two vectors."
+  (sqrt (reduce #'+ (mapcar (lambda (a b) (expt (- a b) 2)) v1 v2))))
 
 (defun manhattan-distance (v1 v2)
-    "Calculates Manhattan distance between two vectors."
-    (reduce #'+ (mapcar (lambda (a b) (abs (- a b))) v1 v2)))
+  "Calculate Manhattan distance between two vectors."
+  (reduce #'+ (mapcar (lambda (a b) (abs (- a b))) v1 v2)))
+
+(defun squared-euclidean-distance (v1 v2)
+  "Calculate squared Euclidean distance."
+  (declare (optimize (speed 3) (safety 0)))
+  (let ((sum 0.0d0))
+    (declare (type double-float sum))
+    (cond
+      ;; Fast path: simple vectors
+      ((and (vectorp v1) (vectorp v2))
+       (let ((n (length v1)))
+         (declare (type fixnum n))
+         (dotimes (i n sum)
+           (let ((diff (- (coerce (aref v1 i) 'double-float)
+                         (coerce (aref v2 i) 'double-float))))
+             (declare (type double-float diff))
+             (incf sum (* diff diff))))))
+      ;; Fallback: handle lists
+      (t
+       (loop for a in v1
+             for b in v2
+             do (let ((diff (- (coerce a 'double-float)
+                              (coerce b 'double-float))))
+                  (declare (type double-float diff))
+                  (incf sum (* diff diff))))
+       sum))))
 
 (defun sigmoid (z)
-    "Computes logistic regressions for binary classification"
-    (/ 1.0 (+ 1.0 (exp (- z)))))
+  "Logistic sigmoid function: 1 / (1 + exp(-z))"
+  (/ 1.0 (+ 1.0 (exp (- z)))))
 
 (defun entropy (labels)
-    "Calculation of Shannons entropy of label list for decision trees"
-    (if (null labels)
-        0.0
-        ;create hash table
-        (let* ((counts (make-hash-table :test #'equal))
-                (n (length labels)))
-            (dolist (label labels)
-              (incf (gethash label counts 0)))
-            (let ((entropy-sum 0.0))
-              (maphash (lambda (label count)
-                    (declare (ignore label))
-                    (let ((p (/ count n)))
-                        (when (> p 0)
-                          (decf entropy-sum (* p (log p 2))))))
-                    counts)
-                entropy-sum))))
+  "Calculate Shannon entropy of label list."
+  (if (null labels)
+      0.0
+      (let* ((counts (make-hash-table :test #'equal))
+             (n (length labels)))
+        (dolist (label labels)
+          (incf (gethash label counts 0)))
+        (let ((entropy-sum 0.0))
+          (maphash (lambda (label count)
+                     (declare (ignore label))
+                     (let ((p (/ count n)))
+                       (when (> p 0)
+                         (decf entropy-sum (* p (log p 2))))))
+                   counts)
+          entropy-sum))))
 
 (defun gaussian-log-pdf (x mean variance)
-    "Calculation of log of Gaussian PDF. -(x-m)^2/(2*sigma^2) - 1/2 log(2(pi)(sigma^2))"
-    (let ((var (max variance 1e-9))) ;avoid division by 0
-        (- (+ (/ (expt (- x mean) 2) 
-            (* 2 var))
-        (* 0.5 (log (* 2 pi var)))))))
-
-
+  "Calculate log of Gaussian PDF.
+   Formula: log(p(x)) = -((x-μ)²/(2σ²)) - 0.5*log(2πσ²)"
+  (let ((var (max variance 1e-9)))  ; Smoothing
+    (- (+ (/ (expt (- x mean) 2) (* 2 var))
+          (* 0.5 (log (* 2 pi var)))))))
 
 ;;;; ============================================================================
-;;;; UTILITY FUNCTIONS - OTHER
+;;;; DATA STRUCTURES
 ;;;; ============================================================================
 
-(defun parse-number (str)
-    "Converting string to number through read, return nil if not number."
-    (ignore-errors
-        (let ((*read-eval* nil))
-            (with-input-from-string (s str)
-                (read s)))))
+(defstruct dataset
+  "Represents a dataset with features and optional target."
+  features        ; List of feature vectors (rows)
+  target          ; List of target values
+  feature-names   ; List of feature column names
+  target-name     ; Name of target column
+  stats)          ; Preprocessing statistics (for normalization)
 
-(defun numeric-string-p (str)
-  "Check if string is a number."
-  (and (stringp str)
-       (not (string= str ""))
-       (let ((num (parse-number str)))
-         (and num (numberp num)))))
+(defstruct model
+  "Generic model structure."
+  type            ; :linear-regression, :logistic-regression, etc.
+  parameters      ; Model-specific parameters
+  hyperparams     ; Training hyperparameters
+  stats)          ; Preprocessing stats from training
 
-(defun one-hot-encode (dataset)
-    "One-hot encode for categorical features in a dataset. 
-    Returns a new dataset with encoded features."
-    (let* ((features (dataset-features dataset))
-            (feature-names (dataset-feature-names dataset))
-            (n-cols (length (first features)))
-            (encoded-features '())
-            (new-feature-names '())
-            (encoding-maps (make-hash-table)))
-        
-        ;;Must identify if col is categorical or numerical
-        (loop for col-idx from 0 below n-cols
-            for col-name in feature-names
-            do (let ((col-values (mapcar (lambda (row) (nth col-idx row)) features)))
-                    ;; Check each value in column if its numerical
-                    (if (every #'numeric-string-p col-values)
-                        ;; Keep Numeric column as is
-                        (progn
-                            (push col-name new-feature-names)
-                            (setf (gethash col-idx encoding-maps) :numeric))
-                        ;; Change Cateogrical to one-hot encoding map    
-                        (let* ((unique-vals (remove-duplicates col-values :test #'string=))
-                                (encoding-map (make-hash-table :test #'equal)))
-                            (loop for i from 0
-                                for val in unique-vals
-                                do (progn
-                                    (setf (gethash val encoding-map) i)
-                                    (push (format nil "~A_~A" col-name val)
-                                        new-feature-names)))
-                            (setf (gethash col-idx encoding-maps) encoding-map)))))
-        
-        (setf new-feature-names (nreverse new-feature-names))
-        
-        ;;Begin Encoding
-        (dolist (row features)
-            (let ((encoded-row '()))
-                (loop for col-idx from 0 below n-cols
-                    for val in row
-                    for encoding = (gethash col-idx encoding-maps)
-                    do (if (eq encoding :numeric)
-                            ;;Ensure it is numeric one last time in case of N/A or ""
-                            (let ((num-val (parse-number val)))
-                             (push (if num-val num-val 0.0) encoded-row))
-                            ;; Categorical - one-hot encode
-                     (let* ((n-categories (hash-table-count encoding))
-                            (one-hot (make-list n-categories :initial-element 0.0))
-                            (cat-idx (gethash val encoding)))
-                       (when cat-idx
-                         (setf (nth cat-idx one-hot) 1.0))
-                       (setf encoded-row (append (reverse one-hot) encoded-row)))))
-        (push (nreverse encoded-row) encoded-features)))
-
-    (make-dataset :features (nreverse encoded-features)
-                  :target (dataset-target dataset)
-                  :feature-names new-feature-names
-                  :target-name (dataset-target-name dataset))))
-
-(defun z-score-normalize (dataset &optional training-stats)
-  "Z-score normalization: (x - mean) / std. Training stats can be used.
-   Returns (values normalized-dataset stats-hash)"
-  (let* ((features (dataset-features dataset))
-         (n-cols (length (first features)))
-         (stats (or training-stats (make-hash-table))))
-
-    ;; Compute stats if not provided
-    (unless training-stats
-      (loop for col-idx from 0 below n-cols
-            do (let ((col-values (mapcar (lambda (row) (nth col-idx row)) features)))
-                 (when (every #'numberp col-values)
-                   (let ((m (mean col-values))
-                         (s (standard-deviation col-values)))
-                     (setf (gethash col-idx stats)
-                           (list :mean m :std (if (zerop s) 1.0 s))))))))
-
-    ;; Normalize features
-    (let ((normalized-features
-           (mapcar (lambda (row)
-                     (loop for col-idx from 0 below n-cols
-                           for val in row
-                           for stat = (gethash col-idx stats)
-                           collect (if (and stat (numberp val))
-                                       (let ((m (getf stat :mean))
-                                             (s (getf stat :std)))
-                                         (/ (- val m) s))
-                                       val)))
-                   features)))
-
-      (values
-       (make-dataset :features normalized-features
-                     :target (dataset-target dataset)
-                     :feature-names (dataset-feature-names dataset)
-                     :target-name (dataset-target-name dataset)
-                     :stats stats)
-       stats))))
-
-(defun prepare-features (dataset &key (normalize t))
-  "Takes a dataset and automatically one-hot encode with option to normalize.
-   Returns (values processed-dataset stats)"
-  (let ((encoded (one-hot-encode dataset)))
-    (if normalize
-        (z-score-normalize encoded)
-        (values encoded nil))))
-
-(defun apply-training-stats (dataset training-stats)
-  "Apply training preprocessing stats to new data."
-  (if training-stats
-      (z-score-normalize dataset training-stats)
-      dataset))
+(defstruct result
+  "Model evaluation result."
+  model-name
+  task-type       ; :classification or :regression
+  accuracy
+  macro-f1
+  rmse
+  r-squared
+  notes)
 
 ;;;; ============================================================================
 ;;;; CSV HANDLING
@@ -343,11 +265,141 @@
               (or (result-notes res) "")))))
 
 ;;;; ============================================================================
+;;;; DATA PREPROCESSING
+;;;; ============================================================================
+
+(defun parse-number (str)
+  "Parse string to number, return nil if not numeric."
+  (when (stringp str)
+    (ignore-errors
+      (let ((*read-eval* nil))
+        (with-input-from-string (s (string-trim '(#\Space #\Tab) str))
+          (let ((val (read s)))
+            (when (numberp val)
+              val)))))))
+
+(defun numeric-string-p (str)
+  "Check if string represents a number."
+  (and (stringp str)
+       (not (string= str ""))
+       (let ((num (parse-number str)))
+         (and num (numberp num)))))
+
+(defun one-hot-encode (dataset)
+  "One-hot encode non-numeric features in dataset.
+   Returns new dataset with encoded features."
+  (let* ((features (dataset-features dataset))
+         (feature-names (dataset-feature-names dataset))
+         (n-cols (length (first features)))
+         (encoded-features '())
+         (new-feature-names '())
+         (encoding-maps (make-hash-table)))
+
+    ;; Identify categorical columns and build encoding maps
+    (loop for col-idx from 0 below n-cols
+          for col-name in feature-names
+          do (let ((col-values (mapcar (lambda (row) (nth col-idx row)) features)))
+               (if (every #'numeric-string-p col-values)
+                   ;; Numeric column - keep as is
+                   (progn
+                     (push col-name new-feature-names)
+                     (setf (gethash col-idx encoding-maps) :numeric))
+                   ;; Categorical - create one-hot encoding map
+                   (let* ((unique-vals (remove-duplicates col-values :test #'string=))
+                          (encoding-map (make-hash-table :test #'equal)))
+                     (loop for i from 0
+                           for val in unique-vals
+                           do (progn
+                                (setf (gethash val encoding-map) i)
+                                (push (format nil "~A_~A" col-name val)
+                                      new-feature-names)))
+                     (setf (gethash col-idx encoding-maps) encoding-map)))))
+
+    (setf new-feature-names (nreverse new-feature-names))
+
+    ;; Encode each row
+    (dolist (row features)
+      (let ((encoded-row '()))
+        (loop for col-idx from 0 below n-cols
+              for val in row
+              for encoding = (gethash col-idx encoding-maps)
+              do (if (eq encoding :numeric)
+                     ;; Numeric - parse and add (ensure it's a number)
+                     (let ((num-val (parse-number val)))
+                       (push (if num-val num-val 0.0) encoded-row))
+                     ;; Categorical - one-hot encode
+                     (let* ((n-categories (hash-table-count encoding))
+                            (one-hot (make-list n-categories :initial-element 0.0))
+                            (cat-idx (gethash val encoding)))
+                       (when cat-idx
+                         (setf (nth cat-idx one-hot) 1.0))
+                       (setf encoded-row (append (reverse one-hot) encoded-row)))))
+        (push (nreverse encoded-row) encoded-features)))
+
+    (make-dataset :features (nreverse encoded-features)
+                  :target (dataset-target dataset)
+                  :feature-names new-feature-names
+                  :target-name (dataset-target-name dataset))))
+
+(defun z-score-normalize (dataset &optional training-stats)
+  "Z-score normalize numeric features: (x - mean) / std.
+   If training-stats provided, use those instead of computing from data.
+   Returns (values normalized-dataset stats-hash)"
+  (let* ((features (dataset-features dataset))
+         (n-cols (length (first features)))
+         (stats (or training-stats (make-hash-table))))
+
+    ;; Compute stats if not provided
+    (unless training-stats
+      (loop for col-idx from 0 below n-cols
+            do (let ((col-values (mapcar (lambda (row) (nth col-idx row)) features)))
+                 (when (every #'numberp col-values)
+                   (let ((m (mean col-values))
+                         (s (standard-deviation col-values)))
+                     (setf (gethash col-idx stats)
+                           (list :mean m :std (if (zerop s) 1.0 s))))))))
+
+    ;; Normalize features
+    (let ((normalized-features
+           (mapcar (lambda (row)
+                     (loop for col-idx from 0 below n-cols
+                           for val in row
+                           for stat = (gethash col-idx stats)
+                           collect (if (and stat (numberp val))
+                                       (let ((m (getf stat :mean))
+                                             (s (getf stat :std)))
+                                         (/ (- val m) s))
+                                       val)))
+                   features)))
+
+      (values
+       (make-dataset :features normalized-features
+                     :target (dataset-target dataset)
+                     :feature-names (dataset-feature-names dataset)
+                     :target-name (dataset-target-name dataset)
+                     :stats stats)
+       stats))))
+
+(defun prepare-features (dataset &key (normalize t))
+  "Complete preprocessing pipeline: one-hot encode and optionally normalize.
+   Returns (values processed-dataset stats)"
+  (let ((encoded (one-hot-encode dataset)))
+    (if normalize
+        (z-score-normalize encoded)
+        (values encoded nil))))
+
+(defun apply-training-stats (dataset training-stats)
+  "Apply training preprocessing stats to new data (e.g., test set)."
+  (if training-stats
+      (z-score-normalize dataset training-stats)
+      dataset))
+
+;;;; ============================================================================
 ;;;; TRAIN/TEST SPLIT
 ;;;; ============================================================================
 
 (defun shuffle-indices (n &optional (seed 42))
-  "Generate shuffled indices from 0 to n-1. Seed allows to reproduce same random order."
+  "Generate shuffled indices from 0 to n-1."
   (let ((indices (loop for i from 0 below n collect i))
         (*random-state* (sb-ext:seed-random-state seed)))
     (loop for i from (1- n) downto 1
@@ -457,7 +509,7 @@
 
 (defun matrix-add (A B)
   "Add two matrices element-wise."
-  (mapcar #'vector-addition A B))
+  (mapcar #'vector-add A B))
 
 (defun matrix-identity (n)
   "Create n×n identity matrix."
@@ -476,6 +528,32 @@
       (error "Matrix is singular"))
     (list (list (/ d det) (/ (- b) det))
           (list (/ (- c) det) (/ a det)))))
+
+(defun train-linear-regression (dataset &key (l2 0.0))
+  "Train linear regression using closed-form solution (normal equation).
+   w = (X^T X + λI)^-1 X^T y"
+  (let* ((X (dataset-features dataset))
+         (y (mapcar #'parse-number (dataset-target dataset)))
+         (X-with-bias (mapcar (lambda (row) (cons 1.0 row)) X))
+         (X-T (matrix-transpose X-with-bias))
+         (XTX (matrix-multiply X-T X-with-bias)))
+
+    ;; Add L2 regularization: XTX + λI
+    (when (> l2 0)
+      (let ((I (matrix-identity (length XTX))))
+        (setf XTX (matrix-add XTX
+                              (mapcar (lambda (row)
+                                        (vector-scale l2 row))
+                                      I)))))
+
+    ;; Using simple matrix inverse
+    (let* ((XTy (mapcar (lambda (row-XT) (dot-product row-XT y)) X-T))
+           ;; Compute weights directly for small problems
+           (weights (solve-linear-system XTX XTy)))
+
+      (make-model :type :linear-regression
+                  :parameters (list :weights weights)
+                  :hyperparams (list :l2 l2)))))
 
 (defun solve-linear-system (A b)
   "Solve Ax = b using Gaussian elimination (simplified)."
@@ -505,32 +583,6 @@
                  (setf (nth i x)
                        (/ sum (nth i (nth i augmented))))))
       x)))
-
-(defun train-linear-regression (dataset &key (l2 0.0))
-  "Train linear regression using closed-form solution (normal equation).
-   w = (X^T X + λI)^-1 X^T y"
-  (let* ((X (dataset-features dataset))
-         (y (mapcar #'parse-number (dataset-target dataset)))
-         (X-with-bias (mapcar (lambda (row) (cons 1.0 row)) X))
-         (X-T (matrix-transpose X-with-bias))
-         (XTX (matrix-multiply X-T X-with-bias)))
-
-    ;; Add L2 regularization: XTX + λI
-    (when (> l2 0)
-      (let ((I (matrix-identity (length XTX))))
-        (setf XTX (matrix-add XTX
-                              (mapcar (lambda (row)
-                                        (vector-scale l2 row))
-                                      I)))))
-
-    (let* ((XTy (mapcar (lambda (row-XT) (dot-product row-XT y)) X-T))
-           ;; Simplified: compute weights directly for small problems
-           (weights (solve-linear-system XTX XTy)))
-
-      (make-model :type :linear-regression
-                  :parameters (list :weights weights)
-                  :hyperparams (list :l2 l2)))))
-
 
 (defun predict-linear-regression (model dataset)
   "Predict using linear regression model."
@@ -592,15 +644,15 @@
                      for pred in predictions
                      do (let ((error (- pred y-i)))
                           (setf grad-w
-                                (vector-addition grad-w
+                                (vector-add grad-w
                                            (vector-scale error x-row)))
                           (incf grad-b error)))
 
                ;; Add L2 regularization to gradient
-               (setf grad-w (vector-addition grad-w (vector-scale l2 w)))
+               (setf grad-w (vector-add grad-w (vector-scale l2 w)))
 
                ;; Update parameters
-               (setf w (vector-subtraction w (vector-scale (/ lr n) grad-w)))
+               (setf w (vector-subtract w (vector-scale (/ lr n) grad-w)))
                (setf b (- b (/ (* lr grad-b) n)))))
 
     (make-model :type :logistic-regression
@@ -623,9 +675,10 @@
 ;;;; MODEL 3: K-NEAREST NEIGHBORS
 ;;;; ============================================================================
 
-(defun train-knn (dataset &key (k 5) (distance-fn #'euclidean-distance)
+(defun train-knn (dataset &key (k 5) (distance-fn #'squared-euclidean-distance)
                          (weighted nil))
-  "Train k-NN (lazy learner - just store training data)."
+  "Train k-NN (lazy learner - just store training data).
+   Default distance-fn is squared-euclidean-distance (optimized, no sqrt)."
   (make-model :type :k-nearest-neighbors
               :parameters (list :X-train (dataset-features dataset)
                                :y-train (dataset-target dataset))
@@ -633,86 +686,109 @@
                                 :distance-fn distance-fn
                                 :weighted weighted)))
 
+(defun find-k-nearest (distances n-train k)
+  "Find indices of k smallest distances using partial selection.
+   Returns a vector of k indices. (partially sorted)"
+  (let ((best-indices (make-array k :element-type 'fixnum))
+        (best-dists   (make-array k :element-type 'double-float :initial-element most-positive-double-float)))
+
+    ;; Initialize with first k elements
+    (dotimes (i (min k n-train))
+      (setf (aref best-indices i) i)
+      (setf (aref best-dists i) (aref distances i)))
+
+    ;;  Maintain k-best using insertion for rest of elements
+    (loop for i from k below n-train
+          for dist = (aref distances i)
+          do (progn
+               ;; Find worst (maximum) in current best-k
+               (let ((worst-idx 0)
+                     (worst-dist (aref best-dists 0)))
+                 (dotimes (j k)
+                   (when (> (aref best-dists j) worst-dist)
+                     (setf worst-idx j
+                           worst-dist (aref best-dists j))))
+
+                 ;; If current distance is better than worst, replace it
+                 (when (< dist worst-dist)
+                   (setf (aref best-indices worst-idx) i)
+                   (setf (aref best-dists worst-idx) dist)))))
+
+    best-indices))
+
 (defun predict-knn (model dataset)
-  "Predict using k-NN model."
-  (let* ((params (model-parameters model))
+  "Predict using k-NN model (optimized with partial selection for k << n)."
+  (let* ((params      (model-parameters model))
          (hyperparams (model-hyperparams model))
-         (X-train (getf params :X-train))
-         (y-train (getf params :y-train))
-         (X-test (dataset-features dataset))
-         (k (getf hyperparams :k))
+         (X-train     (coerce (getf params :X-train) 'vector))
+         (y-train     (coerce (getf params :y-train) 'vector))
+         (X-test      (coerce (dataset-features dataset) 'vector))
+         (n-train     (length X-train))
+         (k           (min (getf hyperparams :k) n-train))
          (distance-fn (getf hyperparams :distance-fn))
-         (weighted (getf hyperparams :weighted)))
+         (weighted    (getf hyperparams :weighted))
+         ;; Preallocate for reuse
+         (distances   (make-array n-train :element-type 'double-float))
+         ;; Use partial selection when k is much smaller than n
+         (use-partial-selection (< k (/ n-train 10))))
 
-    (mapcar (lambda (test-row)
-              ;; Compute distances to all training points
-              (let* ((distances
-                      (mapcar (lambda (train-row)
-                                (funcall distance-fn test-row train-row))
-                              X-train))
-                     ;; Get indices of k nearest neighbors
-                     (sorted-indices
-                      (subseq (sort (loop for i from 0 below (length distances)
-                                         collect (cons (nth i distances) i))
-                                   #'< :key #'car)
-                              0 (min k (length distances)))))
+    (map 'list
+         (lambda (test-row)
+           ;; Fill distance array
+           (dotimes (i n-train)
+             (setf (aref distances i)
+                   (coerce (funcall distance-fn test-row (aref X-train i))
+                          'double-float)))
 
-                (if weighted
-                    ;; Weighted voting (inverse distance)
-                    (let ((votes (make-hash-table :test #'equal)))
-                      (dolist (dist-idx sorted-indices)
-                        (let* ((idx (cdr dist-idx))
-                               (dist (car dist-idx))
-                               (label (nth idx y-train))
-                               (weight (/ 1.0 (+ dist 1e-9))))
-                          (incf (gethash label votes 0.0) weight)))
+           ;; Get k nearest neighbors
+           (let ((k-nearest-indices
+                  (if use-partial-selection
+                      ;; O(n*k) partial selection - faster for small k
+                      (find-k-nearest distances n-train k)
+                      ;; O(n log n) full sort - better for large k
+                      (let ((indices (make-array n-train :element-type 'fixnum)))
+                        (dotimes (i n-train)
+                          (setf (aref indices i) i))
+                        (sort indices #'< :key (lambda (i) (aref distances i)))
+                        (subseq indices 0 k)))))
 
-                      ;; Return label with highest weighted vote
-                      (let ((max-label nil)
-                            (max-weight -1.0))
-                        (maphash (lambda (label weight)
-                                   (when (> weight max-weight)
-                                     (setf max-weight weight
-                                           max-label label)))
-                                 votes)
-                        max-label))
-
-                    ;; Simple majority voting
-                    (let* ((neighbor-labels
-                            (mapcar (lambda (dist-idx)
-                                      (nth (cdr dist-idx) y-train))
-                                    sorted-indices))
-                           (counts (make-hash-table :test #'equal)))
-                      (dolist (label neighbor-labels)
-                        (incf (gethash label counts 0)))
-
-                      ;; Return most common label
-                      (let ((max-label nil)
-                            (max-count 0))
-                        (maphash (lambda (label count)
-                                   (when (> count max-count)
-                                     (setf max-count count
-                                           max-label label)))
-                                 counts)
-                        max-label)))))
-            X-test)))
+             (if weighted
+                 ;; Weighted voting (inverse distance)
+                 (let ((votes (make-hash-table :test #'equal)))
+                   (dotimes (j k)
+                     (let* ((idx    (aref k-nearest-indices j))
+                            (dist   (aref distances idx))
+                            (label  (aref y-train idx))
+                            (weight (/ 1.0d0 (+ dist 1d-9))))
+                       (incf (gethash label votes 0.0d0) weight)))
+                   ;; Argmax over votes
+                   (let ((max-label nil)
+                         (max-weight -1.0d0))
+                     (maphash (lambda (label weight)
+                                (when (> weight max-weight)
+                                  (setf max-weight weight
+                                        max-label  label)))
+                              votes)
+                     max-label))
+                 ;; Simple majority voting
+                 (let ((counts (make-hash-table :test #'equal)))
+                   (dotimes (j k)
+                     (let* ((idx   (aref k-nearest-indices j))
+                            (label (aref y-train idx)))
+                       (incf (gethash label counts 0))))
+                   (let ((max-label nil)
+                         (max-count -1))
+                     (maphash (lambda (label count)
+                                (when (> count max-count)
+                                  (setf max-count count
+                                        max-label  label)))
+                              counts)
+                     max-label)))))
+         X-test)))
 
 ;;;; ============================================================================
 ;;;; MODEL 4: DECISION TREE (ID3)
 ;;;; ============================================================================
-
-
-
-(defun discretize-column (col n-bins)
-  "Discretize numeric column into bins."
-  (let* ((sorted (sort (copy-seq col) #'<))
-         (min-val (first sorted))
-         (max-val (first (last sorted)))
-         (bin-width (/ (- max-val min-val) n-bins)))
-    (mapcar (lambda (val)
-              (min (floor (/ (- val min-val) (max bin-width 1e-9)))
-                   (1- n-bins)))
-            col)))
 
 (defun information-gain (y x-col n-bins)
   "Calculate information gain for splitting on x-col."
@@ -733,6 +809,17 @@
                   (* weight (entropy subset-y)))))))
 
     (- parent-entropy weighted-child-entropy)))
+
+(defun discretize-column (col n-bins)
+  "Discretize numeric column into bins."
+  (let* ((sorted (sort (copy-seq col) #'<))
+         (min-val (first sorted))
+         (max-val (first (last sorted)))
+         (bin-width (/ (- max-val min-val) n-bins)))
+    (mapcar (lambda (val)
+              (min (floor (/ (- val min-val) (max bin-width 1e-9)))
+                   (1- n-bins)))
+            col)))
 
 (defun train-decision-tree (dataset &key (max-depth 5) (min-samples-split 2)
                                     (n-bins 16))
@@ -971,7 +1058,7 @@
     ((and (numberp (first y-pred)) (stringp (first y-true)))
      (values (encode-target-labels y-true) y-pred))
 
-    ;; y-pred is string, y-true is numeric - convert y-pred (shouldn't happen)
+    ;; y-pred is string, y-true is numeric - convert y-pred
     ((and (stringp (first y-pred)) (numberp (first y-true)))
      (values y-true (encode-target-labels y-pred)))
 
@@ -985,11 +1072,12 @@
          (y-pred-raw (predict model test-dataset))
          (model-name (symbol-name (model-type model))))
 
-    ;; Normalize labels for classification
+    ;; Normalize labels for classification, parse numbers for regression
     (multiple-value-bind (y-true y-pred)
         (if (eq task-type :classification)
             (normalize-labels y-true-raw y-pred-raw)
-             (values (mapcar #'parse-number y-true-raw)
+            ;; For regression, parse string targets to numbers
+            (values (mapcar #'parse-number y-true-raw)
                     y-pred-raw))
 
       (case task-type
@@ -1015,6 +1103,103 @@
                                          collect v))))
         (otherwise
          (error "Unknown task type: ~A" task-type))))))
+
+;;;; ============================================================================
+;;;; EXAMPLE USAGE
+;;;; ============================================================================
+
+(defun run-ml-pipeline (csv-path target-col task-type &key
+                        (test-size 0.3) (normalize t) (seed 42))
+  "Complete ML pipeline: load data, train all models, evaluate, save results.
+
+   Parameters:
+     csv-path: path to CSV file
+     target-col: name of target column
+     task-type: :classification or :regression
+     test-size: fraction of data for testing (default 0.3)
+     normalize: whether to normalize features (default t)
+     seed: random seed (default 42)
+
+   Returns: list of result structures"
+
+  (format t "~%========================================~%")
+  (format t "ML Pipeline Started~%")
+  (format t "========================================~%")
+
+  ;; 1. Load data
+  (format t "~%Loading data from ~A...~%" csv-path)
+  (let ((data (load-csv csv-path target-col)))
+    (format t "Loaded ~A samples with ~A features~%"
+            (length (dataset-features data))
+            (length (dataset-feature-names data)))
+
+    ;; 2. Preprocess
+    (format t "~%Preprocessing data...~%")
+    (multiple-value-bind (processed stats)
+        (prepare-features data :normalize normalize)
+      (declare (ignore stats))
+      (format t "One-hot encoding complete~%")
+      (when normalize
+        (format t "Z-score normalization complete~%"))
+
+      ;; 3. Split data
+      (format t "~%Splitting data (test-size=~A)...~%" test-size)
+      (multiple-value-bind (train-data test-data)
+          (train-test-split processed :test-size test-size :seed seed)
+        (format t "Train set: ~A samples~%" (length (dataset-features train-data)))
+        (format t "Test set: ~A samples~%" (length (dataset-features test-data)))
+
+        ;; 4. Train and evaluate models
+        (format t "~%~%========================================~%")
+        (format t "Training and Evaluating Models~%")
+        (format t "========================================~%")
+
+        (let ((results '())
+              (models (case task-type
+                       (:classification
+                        '((:logistic-regression "Logistic Regression"
+                           (:epochs 400 :lr 0.2 :l2 0.001))
+                          (:knn "k-Nearest Neighbors"
+                           (:k 5 :distance-fn squared-euclidean-distance :weighted nil))
+                          (:decision-tree "Decision Tree"
+                           (:max-depth 5 :min-samples-split 2 :n-bins 16))
+                          (:naive-bayes "Gaussian Naive Bayes"
+                           (:var-smoothing 1e-9))))
+                       (:regression
+                        '((:linear-regression "Linear Regression"
+                           (:l2 0.0)))))))
+
+          (dolist (model-spec models)
+            (destructuring-bind (model-type model-name hyperparams) model-spec
+              (format t "~%--- ~A ---~%" model-name)
+              (format t "Training...~%")
+
+              (let ((model (apply #'train-model model-type train-data hyperparams)))
+                (format t "Evaluating...~%")
+                (let ((result (evaluate model test-data task-type)))
+                  (push result results)
+
+                  ;; Print results
+                  (case task-type
+                    (:classification
+                     (format t "  Accuracy: ~,4F~%" (result-accuracy result))
+                     (format t "  Macro-F1: ~,4F~%" (result-macro-f1 result)))
+                    (:regression
+                     (format t "  RMSE: ~,4F~%" (result-rmse result))
+                     (format t "  R²: ~,4F~%" (result-r-squared result))))))))
+
+          ;; 5. Save results
+          (let ((results-path (concatenate 'string
+                                          (subseq csv-path 0
+                                                 (position #\. csv-path
+                                                          :from-end t))
+                                          "_results.csv")))
+            (format t "~%~%========================================~%")
+            (format t "Saving results to ~A~%" results-path)
+            (save-results-csv (nreverse results) results-path)
+            (format t "========================================~%~%"))
+
+          (nreverse results))))))
 
 ;;;; ============================================================================
 ;;;; INDIVIDUAL MODEL RUNNER FUNCTIONS
@@ -1082,9 +1267,10 @@
 
 (defun run-knn (csv-path target-col &key
                 (test-size 0.3) (normalize t) (seed 42)
-                (k 5) (distance-fn #'euclidean-distance) (weighted nil)
+                (k 5) (distance-fn #'squared-euclidean-distance) (weighted nil)
                 (output-csv "knn_results.csv"))
   "Run k-Nearest Neighbors model on CSV data.
+   Default uses optimized squared-euclidean-distance.
    Returns result structure, saves to output-csv."
   (format t "~%Running k-Nearest Neighbors...~%")
   (let ((data (load-csv csv-path target-col)))
@@ -1114,7 +1300,7 @@
 
 (defun run-decision-tree (csv-path target-col &key
                           (test-size 0.3) (normalize t) (seed 42)
-                          (max-depth 4) (min-samples-split 2) (n-bins 16)
+                          (max-depth 5) (min-samples-split 2) (n-bins 16)
                           (output-csv "decision_tree_results.csv"))
   "Run Decision Tree (ID3) model on CSV data.
    Returns result structure, saves to output-csv."
@@ -1176,6 +1362,19 @@
             (format t "✓ Results saved to: ~A~%~%" output-csv)
             result))))))
 
+(defun run-model-by-name (model-name csv-path target-col &rest args)
+  "Run any model by keyword name.
+   Usage: (run-model-by-name :logistic-regression \"data.csv\" \"target\")
+          (run-model-by-name :knn \"data.csv\" \"target\" :k 7)"
+  (case model-name
+    (:linear-regression (apply #'run-linear-regression csv-path target-col args))
+    (:logistic-regression (apply #'run-logistic-regression csv-path target-col args))
+    (:knn (apply #'run-knn csv-path target-col args))
+    (:decision-tree (apply #'run-decision-tree csv-path target-col args))
+    (:naive-bayes (apply #'run-naive-bayes csv-path target-col args))
+    (otherwise (error "Unknown model: ~A" model-name))))
+
 ;;;; ============================================================================
 ;;;; END OF FRAMEWORK
 ;;;; ============================================================================
+
