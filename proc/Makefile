@@ -1,6 +1,6 @@
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2
+CFLAGS = -O2
 LDFLAGS = -lm
 
 SOURCES = main.c data_utils.c preprocessing.c metrics.c logistic_regression.c linear_regression.c knn.c decision_tree.c naive_bayes.c
@@ -19,3 +19,4 @@ clean:
 	rm -f $(OBJECTS) $(TARGET)
 
 .PHONY: all clean
+
