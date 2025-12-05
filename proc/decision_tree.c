@@ -39,11 +39,11 @@ static double entropy(const int *y, int n) {
 }
 
 static int digitize_value(double x, const double *edges, int num_edges) {
-    if (x < edges[0]) return 1;
+    if (x < edges[0]) return 0;
     for (int i = 0; i < num_edges - 1; ++i) {
-        if (x >= edges[i] && x < edges[i+1]) return i + 1;
+        if (x >= edges[i] && x < edges[i+1]) return i;
     }
-    return num_edges - 1;
+    return num_edges - 2;
 }
 
 static int *compute_bins_for_col(const double *col, int n, int n_bins, 
@@ -139,6 +139,7 @@ static Node* build_tree(Frame *X, int *y, int depth, int max_depth,
     int best_feat = -1;
     double best_gain = 0.0;
     double *best_edges = NULL;
+    int *best_bins = NULL;
     
     for (int j = 0; j < d; ++j) {
         double *col = malloc(n * sizeof(double));
@@ -150,13 +151,15 @@ static Node* build_tree(Frame *X, int *y, int depth, int max_depth,
         
         if (g > best_gain) {
             if (best_edges) free(best_edges);
+            if (best_bins) free(best_bins);
             best_gain = g;
             best_feat = j;
             best_edges = edges;
+            best_bins = bins;
         } else {
             free(edges);
+            free(bins);
         }
-        free(bins);
         free(col);
     }
     
@@ -164,13 +167,56 @@ static Node* build_tree(Frame *X, int *y, int depth, int max_depth,
         node->leaf = 1;
         node->label = majority_label(y, n);
         if (best_edges) free(best_edges);
+        if (best_bins) free(best_bins);
         return node;
     }
     
-    //split on  feature 
-    node->leaf = 1;
-    node->label = majority_label(y, n);
-    free(best_edges);
+    // Store split information
+    node->feature = best_feat;
+    node->edges = best_edges;
+    node->num_edges = n_bins + 1;
+    
+    // Get unique bin values
+    int *vals, *cnts, m;
+    unique_int_counts(best_bins, n, &vals, &cnts, &m);
+    
+    //Create children for each bin value
+    node->num_children = m;
+    node->children = malloc(m * sizeof(Node*));
+    
+    for (int k = 0; k < m; ++k) {
+        int bin_val = vals[k];
+        int cnt = cnts[k];
+        
+        //create subset Frame and labels for this bin
+        Frame X_sub;
+        X_sub.rows = cnt;
+        X_sub.cols = d;
+        
+        int *y_sub = malloc(cnt * sizeof(int));
+        
+        int idx = 0;
+        for (int i = 0; i < n; ++i) {
+            if (best_bins[i] == bin_val) {
+                for (int j = 0; j < d; ++j) {
+                    X_sub.data[idx][j] = X->data[i][j];
+                }
+                y_sub[idx] = y[i];
+                idx++;
+            }
+        }
+        
+        //build child tree
+        node->children[k] = build_tree(&X_sub, y_sub, depth + 1, max_depth, 
+                                       min_samples_split, n_bins);
+        
+
+        free(y_sub);
+    }
+    
+    free(best_bins);
+    free(vals);
+    free(cnts);
     
     return node;
 }
@@ -182,7 +228,21 @@ Node* decision_tree_fit(Frame *X, int *y, int max_depth,
 
 void decision_tree_predict(Node *tree, Frame *X, int *out) {
     for (int i = 0; i < X->rows; i++) {
-        out[i] = tree->label;
+        Node *node = tree;
+        
+        // traverse tree until we get to end
+        while (!node->leaf && node->num_children > 0) {
+            int feat = node->feature;
+            double val = X->data[i][feat];
+            int bin = digitize_value(val, node->edges, node->num_edges);
+            
+            if (bin >= 0 && bin < node->num_children) {
+                node = node->children[bin];
+            } else {
+                node = node->children[0];
+            }
+        }
+        out[i] = node->label;
     }
 }
 
