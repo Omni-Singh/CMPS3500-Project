@@ -12,6 +12,32 @@
 #include "decision_tree.h"
 #include "naive_bayes.h"
 
+
+
+
+/*
+====================================================================================================
+
+SUPER IMPORTANT INFO for professor morales
+If your trying to run only the C code you have to type this in the terminal before running ./ml_program
+
+ulimit -s unlimited
+
+example:
+
+make
+ulimit -s unlimited
+./ml_program  
+
+if u want to test different csv or target or tst size
+
+./ml_program file.csv hours.per.week 0.40
+
+=====================================================================================================
+*/
+
+
+
 //puts result into csv file for menu to read
 void save_results_to_csv(const char *filename, 
                          double acc_log, double f1_log,
@@ -125,7 +151,7 @@ int main(int argc, char *argv[]) {
     printf("Decision Tree (ID3)\n");
     printf("Training...");
     fflush(stdout);
-    Node *tree = decision_tree_fit(&Xtr, ytr_int, 5, 10, 16);
+    Node *tree = decision_tree_fit(&Xtr, ytr_int, 6, 10, 16);
     int pred_tree[MAX_ROWS];
     decision_tree_predict(tree, &Xte, pred_tree);
     acc_tree = accuracy_int(yte_int, pred_tree, Xte.rows);
@@ -158,7 +184,7 @@ int main(int argc, char *argv[]) {
     printf(" finish with KNN!\n\n");
 
     
-
+ 
  
     printf("\nRESULTS\n");
     printf("========================================\n");
