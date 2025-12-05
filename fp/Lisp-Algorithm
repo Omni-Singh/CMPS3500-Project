@@ -1105,110 +1105,13 @@
          (error "Unknown task type: ~A" task-type))))))
 
 ;;;; ============================================================================
-;;;; EXAMPLE USAGE
-;;;; ============================================================================
-
-(defun run-ml-pipeline (csv-path target-col task-type &key
-                        (test-size 0.3) (normalize t) (seed 42))
-  "Complete ML pipeline: load data, train all models, evaluate, save results.
-
-   Parameters:
-     csv-path: path to CSV file
-     target-col: name of target column
-     task-type: :classification or :regression
-     test-size: fraction of data for testing (default 0.3)
-     normalize: whether to normalize features (default t)
-     seed: random seed (default 42)
-
-   Returns: list of result structures"
-
-  (format t "~%========================================~%")
-  (format t "ML Pipeline Started~%")
-  (format t "========================================~%")
-
-  ;; 1. Load data
-  (format t "~%Loading data from ~A...~%" csv-path)
-  (let ((data (load-csv csv-path target-col)))
-    (format t "Loaded ~A samples with ~A features~%"
-            (length (dataset-features data))
-            (length (dataset-feature-names data)))
-
-    ;; 2. Preprocess
-    (format t "~%Preprocessing data...~%")
-    (multiple-value-bind (processed stats)
-        (prepare-features data :normalize normalize)
-      (declare (ignore stats))
-      (format t "One-hot encoding complete~%")
-      (when normalize
-        (format t "Z-score normalization complete~%"))
-
-      ;; 3. Split data
-      (format t "~%Splitting data (test-size=~A)...~%" test-size)
-      (multiple-value-bind (train-data test-data)
-          (train-test-split processed :test-size test-size :seed seed)
-        (format t "Train set: ~A samples~%" (length (dataset-features train-data)))
-        (format t "Test set: ~A samples~%" (length (dataset-features test-data)))
-
-        ;; 4. Train and evaluate models
-        (format t "~%~%========================================~%")
-        (format t "Training and Evaluating Models~%")
-        (format t "========================================~%")
-
-        (let ((results '())
-              (models (case task-type
-                       (:classification
-                        '((:logistic-regression "Logistic Regression"
-                           (:epochs 400 :lr 0.2 :l2 0.001))
-                          (:knn "k-Nearest Neighbors"
-                           (:k 5 :distance-fn squared-euclidean-distance :weighted nil))
-                          (:decision-tree "Decision Tree"
-                           (:max-depth 5 :min-samples-split 2 :n-bins 16))
-                          (:naive-bayes "Gaussian Naive Bayes"
-                           (:var-smoothing 1e-9))))
-                       (:regression
-                        '((:linear-regression "Linear Regression"
-                           (:l2 0.0)))))))
-
-          (dolist (model-spec models)
-            (destructuring-bind (model-type model-name hyperparams) model-spec
-              (format t "~%--- ~A ---~%" model-name)
-              (format t "Training...~%")
-
-              (let ((model (apply #'train-model model-type train-data hyperparams)))
-                (format t "Evaluating...~%")
-                (let ((result (evaluate model test-data task-type)))
-                  (push result results)
-
-                  ;; Print results
-                  (case task-type
-                    (:classification
-                     (format t "  Accuracy: ~,4F~%" (result-accuracy result))
-                     (format t "  Macro-F1: ~,4F~%" (result-macro-f1 result)))
-                    (:regression
-                     (format t "  RMSE: ~,4F~%" (result-rmse result))
-                     (format t "  R²: ~,4F~%" (result-r-squared result))))))))
-
-          ;; 5. Save results
-          (let ((results-path (concatenate 'string
-                                          (subseq csv-path 0
-                                                 (position #\. csv-path
-                                                          :from-end t))
-                                          "_results.csv")))
-            (format t "~%~%========================================~%")
-            (format t "Saving results to ~A~%" results-path)
-            (save-results-csv (nreverse results) results-path)
-            (format t "========================================~%~%"))
-
-          (nreverse results))))))
-
-;;;; ============================================================================
 ;;;; INDIVIDUAL MODEL RUNNER FUNCTIONS
 ;;;; ============================================================================
 ;;;; Call these directly to run a single model
 
 (defun run-linear-regression (csv-path target-col &key
                                (test-size 0.3) (normalize t) (seed 42)
-                               (l2 0.0)
+                               (l2 1.0)
                                (output-csv "linear_regression_results.csv"))
   "Run Linear Regression model on CSV data.
    Returns result structure, saves to output-csv."
