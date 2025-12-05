@@ -151,7 +151,7 @@ int main(int argc, char *argv[]) {
     printf("Decision Tree (ID3)\n");
     printf("Training...");
     fflush(stdout);
-    Node *tree = decision_tree_fit(&Xtr, ytr_int, 6, 10, 16);
+    Node *tree = decision_tree_fit(&Xtr, ytr_int, 5, 10, 16);
     int pred_tree[MAX_ROWS];
     decision_tree_predict(tree, &Xte, pred_tree);
     acc_tree = accuracy_int(yte_int, pred_tree, Xte.rows);
