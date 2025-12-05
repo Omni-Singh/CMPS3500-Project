@@ -1,0 +1,6 @@
+Language,Algorithm,TrainTime,Metric1,Metric2,SLOC
+Java,linear,1.1524,0.3470,0.3749,150
+Java,logistic,3.2773,0.8449,0.7868,140
+Java,knn,0.0087,0.8148,0.7496,120
+Java,tree,1.5411,0.8252,0.7607,250
+Java,naivebayes,0.0909,0.4161,0.4111,110

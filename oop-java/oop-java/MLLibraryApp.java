@@ -4,7 +4,6 @@ import ml.utils.MetricsUtil;
 import java.io.IOException;
 import java.util.*;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.PrintWriter;
 
 public class MLLibraryApp {
@@ -64,15 +63,6 @@ public class MLLibraryApp {
     }
     
     private void loadData() {
-        // Clear old results file
-        try {
-            File resultsFile = new File("../results/java_results.csv");
-            if (resultsFile.exists()) {
-                resultsFile.delete();
-            }
-        } catch (Exception e) {
-            // Silent fail
-        }
         System.out.println("\nPick dataset from list:");
         System.out.println("");
     
@@ -164,7 +154,7 @@ public class MLLibraryApp {
         System.out.println(String.format("Metric 2: R^2: %.4f", metrics.getMetric("R^2")));
         System.out.println("Metric 3: SLOC: 123");
         
-        saveResults("linear", metrics, model.getTrainTime(), "Regression");
+        saveResults("linear", metrics, model.getTrainTime());
 
         results.put("Linear Regression", new ModelResult(model.getName(), "Regression", 
             metrics, model.getTrainTime()));
@@ -197,7 +187,7 @@ public class MLLibraryApp {
         System.out.println(String.format("Metric 2: Macro-F1: %.4f", metrics.getMetric("Macro-F1")));
         System.out.println("Metric 3: SLOC: 103");
         
-        saveResults("logistic", metrics, model.getTrainTime(), "Classification");
+        saveResults("logistic", metrics, model.getTrainTime());
 
         results.put("Logistic Regression", new ModelResult(model.getName(), "Classification", 
             metrics, model.getTrainTime()));
@@ -226,7 +216,7 @@ public class MLLibraryApp {
         System.out.println(String.format("Metric 2: Macro-F1: %.4f", metrics.getMetric("Macro-F1")));
         System.out.println("Metric 3: SLOC: 81");
         
-        saveResults("knn", metrics, model.getTrainTime(), "Classification");
+        saveResults("knn", metrics, model.getTrainTime());
 
         results.put("k-NN", new ModelResult(model.getName(), "Classification", 
             metrics, model.getTrainTime()));
@@ -257,7 +247,7 @@ public class MLLibraryApp {
         System.out.println(String.format("Metric 2: Macro-F1: %.4f", metrics.getMetric("Macro-F1")));
         System.out.println("Metric 3: SLOC: 192");
         
-        saveResults("tree", metrics, model.getTrainTime(), "Classification");
+        saveResults("tree", metrics, model.getTrainTime());
 
         results.put("Decision Tree", new ModelResult(model.getName(), "Classification", 
             metrics, model.getTrainTime()));
@@ -286,7 +276,7 @@ public class MLLibraryApp {
         System.out.println(String.format("Metric 2: Macro-F1: %.4f", metrics.getMetric("Macro-F1")));
         System.out.println("Metric 3: SLOC: 97");
         
-        saveResults("naivebayes", metrics, model.getTrainTime(), "Classification");
+        saveResults("naivebayes", metrics, model.getTrainTime());
 
         results.put("Naive Bayes", new ModelResult(model.getName(), "Classification", 
             metrics, model.getTrainTime()));
@@ -389,56 +379,23 @@ public class MLLibraryApp {
         app.run();
     }
 
-    private void saveResults(String algoName, ModelMetrics metrics, double trainTime, String taskType) {
+    private void saveResults(String algoName, ModelMetrics metrics, double trainTime) {
         try {
             File resultsDir = new File("../results");
             resultsDir.mkdirs();
-        
-            File resultsFile = new File("../results/java_results.csv");
-            boolean fileExists = resultsFile.exists();
-        
-            // Open in append mode (true = append)
-            FileWriter fw = new FileWriter(resultsFile, true);
-            PrintWriter out = new PrintWriter(fw);
-        
-            // Write header only if new file
-            if (!fileExists) {
-                out.println("Language,Algorithm,TrainTime,Metric1,Metric2,SLOC");
-            }
-        
-            // Get appropriate metrics
-            double metric1, metric2;
-            if (taskType.equals("Classification")) {
-                metric1 = metrics.getMetric("Accuracy");
-                metric2 = metrics.getMetric("Macro-F1");
-            } else { // Regression
-                metric1 = metrics.getMetric("RMSE");
-                metric2 = metrics.getMetric("R^2");
-            }
-        
-            int sloc = getSLOC(algoName);
-        
-            // Write data
-            out.printf("Java,%s,%.4f,%.4f,%.4f,%d\n",
-                algoName, trainTime, metric1, metric2, sloc);
-        
+            
+            String filename = String.format("../results/java_%s.txt", algoName);
+            PrintWriter out = new PrintWriter(filename);
+            
+            out.printf("Java,%s,%.4f,%.4f,%.4f,140\n",
+                algoName,
+                trainTime,
+                metrics.getMetric("Accuracy"),
+                metrics.getMetric("Macro-F1"));
+            
             out.close();
-            fw.close();
-        
         } catch (Exception e) {
-            System.err.println("Error saving results: " + e.getMessage());
-        }
-    }   
-
-    // Helper
-    private int getSLOC(String algoName) {
-        switch(algoName) {
-            case "linear": return 150;
-            case "logistic": return 140;
-            case "knn": return 120;
-            case "tree": return 250;
-            case "naivebayes": return 110;
-            default: return 0;
+            // Silent fail
         }
     }
 
