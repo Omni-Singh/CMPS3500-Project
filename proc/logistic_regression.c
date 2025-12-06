@@ -4,17 +4,18 @@
 #include <stdlib.h>
 #include "logistic_regression.h"
 
+// Sigmoid activation
 static double sigmoid(double z) {
-    if (z < -500) z = -500;
+    if (z < -500) z = -500; // avoid overflow
     if (z > 500) z = 500;
     return 1.0 / (1.0 + exp(-z));
 }
 
 void logistic_regression_fit(Frame *X, int *y, double *w_out, double *b_out) {
-    int n = X->rows;
-    int d = X->cols;
-    double lr = 0.1;
-    int epochs = 300;
+    int n = X->rows;    // samples
+    int d = X->cols;    // features
+    double lr = 0.1;    // learning rate
+    int epochs = 300;   // training loops
     
     for (int j = 0; j < d; j++) w_out[j] = 0.0;
     *b_out = 0.0;
@@ -26,6 +27,7 @@ void logistic_regression_fit(Frame *X, int *y, double *w_out, double *b_out) {
         for (int i = 0; i < n; i++) {
             double z = *b_out;
             for (int j = 0; j < d; j++) z += X->data[i][j] * w_out[j];
+            
             double pred = sigmoid(z);
             double err = pred - y[i];
             
@@ -44,6 +46,6 @@ void logistic_regression_predict(Frame *X, double *w, double b, int *out) {
     for (int i = 0; i < X->rows; i++) {
         double z = b;
         for (int j = 0; j < X->cols; j++) z += X->data[i][j] * w[j];
-        out[i] = (sigmoid(z) >= 0.5) ? 1 : 0;
+        out[i] = (sigmoid(z) >= 0.5) ? 1 : 0; // threshold for prediction
     }
 }
