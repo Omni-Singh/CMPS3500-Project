@@ -4,11 +4,13 @@
 #include <math.h>
 #include "naive_bayes.h"
 
+// Gaussian log probability
 static double gaussian_logpdf(double x, double mean, double var) {
-    if (var < 1e-9) var = 1e-9;
+    if (var < 1e-9) var = 1e-9; // avoid zero variance
     return -0.5 * log(2 * M_PI * var) - 0.5 * ((x - mean) * (x - mean)) / var;
 }
 
+// Find unique class labels
 static int *unique_labels(const int *y, int n, int *out_k) {
     int *vals = malloc(n * sizeof(int));
     int k = 0;
@@ -30,7 +32,7 @@ GNBModel naive_bayes_fit(Frame *X, int *y) {
     int d = X->cols;
     
     int k;
-    int *classes = unique_labels(y, n, &k);
+    int *classes = unique_labels(y, n, &k); // distinct labels
     model.num_classes = k;
     model.classes = classes;
 
@@ -41,7 +43,8 @@ GNBModel naive_bayes_fit(Frame *X, int *y) {
     for (int i = 0; i < k; i++) {
         int c = classes[i];
         int count = 0;
-        for (int t = 0; t < n; t++) 
+
+        for (int t = 0; t < n; t++)
             if (y[t] == c) count++;
 
         model.priors[i] = (double)count / (double)n;
@@ -53,15 +56,17 @@ GNBModel naive_bayes_fit(Frame *X, int *y) {
             var[j] = 0.0;
         }
 
+        // sum feature values for this class
         for (int t = 0; t < n; t++) {
             if (y[t] == c) {
-                for (int j = 0; j < d; j++) 
+                for (int j = 0; j < d; j++)
                     mean[j] += X->data[t][j];
             }
         }
-        for (int j = 0; j < d; j++) 
+        for (int j = 0; j < d; j++)
             mean[j] /= (double)count;
 
+        // compute variance
         for (int t = 0; t < n; t++) {
             if (y[t] == c) {
                 for (int j = 0; j < d; j++) {
@@ -72,7 +77,7 @@ GNBModel naive_bayes_fit(Frame *X, int *y) {
         }
         for (int j = 0; j < d; j++) {
             var[j] /= (double)count;
-            var[j] += 1e-9;
+            var[j] += 1e-9; // smoothing
         }
 
         model.means[i] = mean;
@@ -90,11 +95,12 @@ void naive_bayes_predict(GNBModel *model, Frame *X, int *pred) {
         double best = -1e300;
         int best_class = 0;
 
+        // choose class with highest log-probability
         for (int c = 0; c < model->num_classes; c++) {
             double logp = log(model->priors[c]);
             for (int j = 0; j < d; j++) {
-                logp += gaussian_logpdf(X->data[i][j], 
-                                       model->means[c][j], 
+                logp += gaussian_logpdf(X->data[i][j],
+                                       model->means[c][j],
                                        model->vars[c][j]);
             }
             if (logp > best) {
@@ -107,6 +113,7 @@ void naive_bayes_predict(GNBModel *model, Frame *X, int *pred) {
 }
 
 void naive_bayes_free(GNBModel *model) {
+    // free allocated memory
     for (int i = 0; i < model->num_classes; i++) {
         free(model->means[i]);
         free(model->vars[i]);
